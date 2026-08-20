@@ -61,7 +61,13 @@ async function saveAgentRun(issueRecord, state, agentName, result, status = "com
     output,
   };
   try {
-    if (issueRecord.id) await AgentRun.create(values);
+    if (issueRecord.id) {
+      const [run] = await AgentRun.findOrCreate({
+        where: { issueId: issueRecord.id, agentName },
+        defaults: values,
+      });
+      if (!run.isNewRecord) await run.update(values);
+    }
   } catch (error) {
     console.error("Workflow database agent write failed:", error.message);
   }

@@ -101,6 +101,7 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     ["health", agentDirs.health, "health_agent.py", ["--owner", owner, "--repo", repo], undefined],
   ];
   for (const [name, dir, script, args, payload] of steps) {
+    if (record.agents[name]?.status === "complete" && !(name === "missingInfo" && record.resumeMissingInfo)) continue;
     record.step += 1;
     await saveWorkflow(record.issueRecord, { step: record.step, status: "running", output: record });
     const result = await startAgent(name, dir, script, args, payload, env, record);
@@ -118,6 +119,7 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
       if (result.draft_comment) await githubIssueAction(owner, repo, issue.number, token, "POST", { body: result.draft_comment });
       record.status = "waiting_missing_info";
       record.stopReason = "Missing information requested from the reporter.";
+      await saveAgentRun(record.issueRecord, { step: record.step, status: record.status }, name, result, record.status);
       await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
       return;
     }
@@ -127,21 +129,25 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
   await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
 }
 
-async function createAnalysis(issue, repository, token) {
+async function createAnalysis(issue, repository, token, persisted) {
   const issueRecord = await ensureIssue(issue, repository.owner.login, repository.name);
+  const completedSteps = Object.values(persisted?.agents || {}).filter((agent) => agent.status === "complete").length;
   const record = {
     issue,
     repository: { owner: repository.owner.login, name: repository.name },
     status: "running",
     createdAt: new Date().toISOString(),
-    agents: {},
-    step: 0,
+    agents: persisted?.agents || {},
+    step: completedSteps,
+    resumeMissingInfo: persisted?.status === "waiting_missing_info",
   };
   Object.defineProperty(record, "issueRecord", { value: issueRecord, enumerable: false, writable: true });
   analyses.set(analysisKey(repository.owner.login, repository.name, issue.number), record);
-  runAllAgents(issue, repository, record, token).catch((error) => {
+  await saveWorkflow(issueRecord, { step: record.step, status: "running", output: record });
+  runAllAgents(issue, repository, record, token).catch(async (error) => {
     record.status = "failed";
     record.error = error.message;
+    await saveWorkflow(issueRecord, { step: record.step, status: record.status, output: record });
   });
   return record;
 }
@@ -180,17 +186,25 @@ router.post(["/github", "/"], async (req, res) => {
     return res.status(400).json({ error: "Invalid issue webhook payload" });
   }
 
+  await ensureIssue(issue, repository.owner.login, repository.name);
+
   if (!process.env.GITHUB_TOKEN) {
     console.error("Duplicate webhook skipped: GITHUB_TOKEN is not configured");
     lastWebhook.rejected = "missing_github_token";
     return res.status(503).json({ error: "GITHUB_TOKEN is not configured for automatic agents" });
   }
 
-  let existing = getAnalysis(repository.owner.login, repository.name, issue.number);
-  if (!existing) existing = await getPersistedAnalysis(repository.owner.login, repository.name, issue.number);
+  const inMemoryAnalysis = getAnalysis(repository.owner.login, repository.name, issue.number);
+  let existing = inMemoryAnalysis || await getPersistedAnalysis(repository.owner.login, repository.name, issue.number);
   const isResume = reporterReply || req.body.action === "edited";
-  if (isResume && existing?.status === "stopped_duplicate") return res.status(202).json({ accepted: true, processed: false, issue: issue.number });
-  const record = await createAnalysis(issue, repository, process.env.GITHUB_TOKEN);
+  if (inMemoryAnalysis?.status === "running") return res.status(202).json({ accepted: true, processed: false, resumed: true, issue: issue.number });
+  if (existing?.status === "complete" || existing?.status === "stopped_duplicate") {
+    return res.status(202).json({ accepted: true, processed: false, issue: issue.number });
+  }
+  if (!isResume && existing?.status === "waiting_missing_info") {
+    return res.status(202).json({ accepted: true, processed: false, issue: issue.number });
+  }
+  const record = await createAnalysis(issue, repository, process.env.GITHUB_TOKEN, existing);
   lastWebhook.processed = true;
   lastWebhook.issue = issue.number;
   res.status(202).json({ accepted: true, processed: true, issue: issue.number });
