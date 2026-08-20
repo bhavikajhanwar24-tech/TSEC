@@ -5,7 +5,8 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://tsec-qjcg.onrende
 const tabs = ['Overview', 'Issues', 'Pull requests', 'Commits', 'Contributors', 'Code changes']
 
 async function api(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const url = `${API_BASE}${path}`
+  const response = await fetch(url, {
     method: options.method || 'GET',
     headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined,
@@ -13,7 +14,7 @@ async function api(path, options = {}) {
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
-    throw new Error(body.error || `Request failed (${response.status})`)
+    throw new Error(body.error || `Request failed (${response.status}) at ${url}`)
   }
   return response.json()
 }
@@ -90,7 +91,7 @@ function RepositoryChat({ owner, repo }) {
     setMessages((current) => [...current, { role: 'user', text: value }])
     setLoading(true)
     try {
-      const result = await api(`/api/repos/${owner}/${repo}/chat`, { method: 'POST', body: { question: value } })
+      const result = await api(`/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/chat`, { method: 'POST', body: { question: value } })
       setMessages((current) => [...current, { role: 'assistant', text: result.answer, sources: result.sources || [] }])
     } catch (requestError) {
       setError(requestError.message)
