@@ -42,6 +42,7 @@ if (databaseUrl && !databaseUrl.startsWith("your_")) {
   sessionStore = new PgSession({
     conString: process.env.DATABASE_URL,
     createTableIfMissing: true,
+    ssl: isHttps ? { rejectUnauthorized: false } : undefined,
   });
 }
 
