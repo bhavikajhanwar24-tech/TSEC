@@ -56,11 +56,10 @@ router.get("/github", (req, res) => {
 });
 
 router.get("/github/install", (req, res) => {
-  const appSlug = process.env.GITHUB_APP_SLUG;
-  if (!appSlug) {
-    return res.status(500).send("GitHub App installation is not configured");
-  }
-  res.redirect(`https://github.com/apps/${encodeURIComponent(appSlug)}/installations/new`);
+  const configuredUrl = process.env.GITHUB_APP_INSTALL_URL;
+  const appSlug = process.env.GITHUB_APP_SLUG || "repoguardian";
+  const installUrl = configuredUrl || `https://github.com/apps/${encodeURIComponent(appSlug)}/installations/new`;
+  res.redirect(installUrl);
 });
 
 router.get("/github/callback", async (req, res) => {
