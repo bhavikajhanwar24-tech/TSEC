@@ -286,7 +286,6 @@ def build_llm() -> Optional[ChatNVIDIA]:
         temperature=0.1,
         top_p=1,
         max_completion_tokens=4096,
-        model_kwargs={"reasoning_budget": 4096},
     )
 
 
@@ -443,7 +442,12 @@ def node_compare_evidence(state: AgentState) -> AgentState:
             parsed["match_strength"] = min(len(evidence), 4)
             matches.append({**base, **parsed})
         except Exception as exc:  # never let one bad parse kill the run
-            matches.append({**base, "classification": "not_duplicate", "evidence": [], "match_strength": 0, "error": str(exc)})
+            comparison = _compare_heuristic(state["signals"], cand)
+            matches.append({
+                **base,
+                **comparison,
+                "model_fallback": True,
+            })
     # Rank by semantic similarity AND evidence quality together so that a
     # candidate with slightly lower similarity but much stronger evidence
     # (e.g. matching stack frame) outranks a title-only lookalike.
