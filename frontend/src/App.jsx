@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import "./App.css";
 
 const API_BASE =
@@ -449,6 +449,7 @@ function TrendChart({
   format,
   markerIndex,
   projection,
+  badge,
 }) {
   const w = 280;
   const h = 88;
@@ -485,6 +486,7 @@ function TrendChart({
         <strong>{title}</strong>
         <span>
           {format ? format(safe[safe.length - 1]) : safe[safe.length - 1]}
+          {badge && <em className="health-chart-badge">{badge}</em>}
         </span>
       </div>
       <svg
@@ -624,6 +626,7 @@ function BacklogFlowChart({ labels, opened, closed, backlog, color }) {
   const safeOpen = (opened || []).map((v) => Number(v) || 0);
   const safeClosed = (closed || []).map((v) => Number(v) || 0);
   const safeBacklog = (backlog || []).map((v) => Number(v) || 0);
+  const net = safeOpen.map((v, i) => v - (safeClosed[i] || 0));
   const proj = projectSeries(safeBacklog);
   const max = Math.max(...safeOpen, ...safeClosed, ...safeBacklog, ...proj, 1);
   const step = (w - 2 * pad) / Math.max(1, safeOpen.length + proj.length - 1);
@@ -640,6 +643,10 @@ function BacklogFlowChart({ labels, opened, closed, backlog, color }) {
     .join(" ")} Z`;
   const backlogPts = safeBacklog.map((v, i) => [xOf(i), yOf(v)]);
   const backlogLine = backlogPts
+    .map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(" ");
+  const netPts = net.map((v, i) => [xOf(i), yOf(v)]);
+  const netLine = netPts
     .map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`)
     .join(" ");
   const projLine =
@@ -688,6 +695,19 @@ function BacklogFlowChart({ labels, opened, closed, backlog, color }) {
             opacity="0.7"
           />
         )}
+        <path
+          d={netLine}
+          fill="none"
+          stroke="#ffffff"
+          strokeWidth="1"
+          strokeDasharray="2 4"
+          opacity="0.45"
+        />
+        {netPts.map(([x, y], i) => (
+          <circle key={`n${i}`} cx={x.toFixed(1)} cy={y.toFixed(1)} r="1.6" fill="#ffffff" opacity="0.5">
+            <title>{`${labels[i]}: net ${net[i] >= 0 ? "+" : ""}${net[i]} issues`}</title>
+          </circle>
+        ))}
         {backlogPts.map(([x, y], i) => (
           <circle
             key={i}
@@ -714,10 +734,149 @@ function BacklogFlowChart({ labels, opened, closed, backlog, color }) {
           <i style={{ background: "transparent", border: "1px dashed #fff" }} />{" "}
           forecast
         </span>
+        <span>
+          <i style={{ background: "transparent", border: "1px dotted #fff" }} />{" "}
+          net change
+        </span>
       </div>
       <div className="health-chart-labels">
         <span>{labels[0]}</span>
         <span>{labels[labels.length - 1]}</span>
+      </div>
+    </div>
+  );
+}
+
+function ContributorStackChart({ labels, active, fresh }) {
+  const w = 280;
+  const h = 100;
+  const pad = 8;
+  const safeActive = (active || []).map((v) => Number(v) || 0);
+  const safeFresh = (fresh || []).map((v) => Number(v) || 0);
+  const safeReturning = safeActive.map(
+    (v, i) => Math.max(0, v - (safeFresh[i] || 0)),
+  );
+  const max = Math.max(...safeActive, 1);
+  const step = (w - 2 * pad) / Math.max(1, safeActive.length - 1);
+  const xOf = (i) => pad + i * step;
+  const yOf = (v) => h - pad - (v / max) * (h - 2 * pad);
+  const bottom = safeFresh.map((v, i) => [xOf(i), yOf(v)]);
+  const top = safeActive.map((v, i) => [xOf(i), yOf(v)]);
+  const area = `${bottom
+    .map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(" ")} ${top
+    .slice()
+    .reverse()
+    .map(([x, y]) => `L${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(" ")} Z`;
+  const newLine = safeFresh
+    .map((v, i) => `${i ? "L" : "M"}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`)
+    .join(" ");
+  return (
+    <div className="health-chart-card">
+      <div className="health-chart-heading">
+        <strong>Contributor activity</strong>
+        <span>{safeActive[safeActive.length - 1] ?? 0} active last week</span>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="health-chart" role="img">
+        <path d={area} fill="#a78bfa" opacity="0.18" />
+        <path d={area} fill="none" stroke="#a78bfa" strokeWidth="1" opacity="0.5" />
+        <path d={newLine} fill="none" stroke="#34d399" strokeWidth="1.6" />
+        {safeActive.map((v, i) => (
+          <circle key={i} cx={xOf(i).toFixed(1)} cy={yOf(v).toFixed(1)} r="2" fill="#a78bfa">
+            <title>{`${labels[i]}: ${safeReturning[i]} returning + ${safeFresh[i]} new`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div className="health-chart-labels">
+        <span>{labels[0]}</span>
+        <span>{labels[labels.length - 1]}</span>
+      </div>
+      <div className="health-chart-labels">
+        <span>
+          <i style={{ background: "#a78bfa" }} /> returning
+        </span>
+        <span>
+          <i style={{ background: "#34d399" }} /> new
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ContributorHeatmap({ rows, labels }) {
+  if (!Array.isArray(rows) || !rows.length) return null;
+  return (
+    <div className="health-chart-card heatmap-card">
+      <div className="health-chart-heading">
+        <strong>Contributor heatmap</strong>
+        <span>{rows.length} contributors · comment activity</span>
+      </div>
+      <div
+        className="heatmap-grid"
+        style={{
+          gridTemplateColumns: `118px repeat(${labels.length}, minmax(0, 1fr))`,
+        }}
+      >
+        <span className="heatmap-cell heatmap-head">contributor</span>
+        {labels.map((l) => (
+          <span className="heatmap-cell heatmap-head" key={l}>
+            {l.length > 10 ? l.slice(0, 10) + "…" : l}
+          </span>
+        ))}
+        {rows.map((row) => (
+          <Fragment key={row.login}>
+            <span className="heatmap-cell heatmap-user">@{row.login}</span>
+            {(row.weeks || []).map((active, i) => (
+              <span
+                className={`heatmap-cell heatmap-dot ${active ? "active" : ""}`}
+                key={i}
+                title={`${row.login} — ${labels[i] || "?"}: ${active ? "active" : "inactive"}`}
+              />
+            ))}
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HealthSnapshotTable({ labels, series }) {
+  const rows = [
+    { key: "time_to_first_response_days", label: "Response (days)" },
+    { key: "backlog_size", label: "Backlog" },
+    { key: "incoming_volume", label: "Opened" },
+    { key: "issues_closed", label: "Closed" },
+    { key: "close_open_ratio", label: "Close/open ratio" },
+    { key: "duplicate_rate", label: "Duplicate %" },
+    { key: "pr_merge_latency_days", label: "PR latency (d)" },
+    { key: "active_contributors", label: "Contributors" },
+    { key: "new_contributors", label: "New contributors" },
+  ].filter((r) => Array.isArray(series[r.key]) && series[r.key].length);
+  if (!rows.length || !labels.length) return null;
+  return (
+    <div className="health-chart-card snapshot-card">
+      <div className="health-chart-heading">
+        <strong>Weekly snapshot</strong>
+        <span>
+          {labels[0]} → {labels[labels.length - 1]}
+        </span>
+      </div>
+      <div className="snapshot-table">
+        <div className="snapshot-row snapshot-head">
+          <span>metric</span>
+          {labels.map((l) => (
+            <span key={l}>{l.length > 8 ? l.slice(5) : l}</span>
+          ))}
+        </div>
+        {rows.map((r) => (
+          <div className="snapshot-row" key={r.key}>
+            <span>{r.label}</span>
+            {series[r.key].map((v, i) => (
+              <span key={i}>{Math.round(Number(v) * 100) / 100}</span>
+            ))}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -857,6 +1016,12 @@ function HealthTrendDetail({ result }) {
             color="#e5484d"
             format={(v) => `${v} days`}
             markerIndex={responseMarker}
+            badge={
+              responseTrend &&
+              responseTrend.recent_value > responseTrend.baseline_value
+                ? `degrading since ${responseTrend.change_week}`
+                : undefined
+            }
           />
         )}
         {has("backlog_size") && (
@@ -887,11 +1052,18 @@ function HealthTrendDetail({ result }) {
           />
         )}
         {has("active_contributors") && (
-          <TrendChart
-            title="Active contributors / week"
+          <ContributorStackChart
             labels={labels}
-            values={series.active_contributors}
-            color="#3b82f6"
+            active={series.active_contributors}
+            fresh={series.new_contributors}
+          />
+        )}
+        {has("close_open_ratio") && (
+          <TrendChart
+            title="Close rate / open rate"
+            labels={labels}
+            values={series.close_open_ratio}
+            color="#14b8a6"
             format={(v) => `${v}`}
           />
         )}
@@ -905,6 +1077,11 @@ function HealthTrendDetail({ result }) {
           />
         )}
       </div>
+      <ContributorHeatmap
+        rows={result.contributor_matrix || []}
+        labels={labels}
+      />
+      <HealthSnapshotTable labels={labels} series={series} />
       {contributors.length > 0 && (
         <div className="result-list">
           <strong>Contributor activity</strong>
@@ -920,6 +1097,16 @@ function HealthTrendDetail({ result }) {
                 {contributor.inactive
                   ? `inactive ~${contributor.last_active_days_ago} days`
                   : `active ${contributor.last_active_days_ago} days ago`}
+                {contributor.last_comment_url ? (
+                  <a
+                    href={contributor.last_comment_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="last-comment-link"
+                  >
+                    last comment
+                  </a>
+                ) : null}
               </span>
             </div>
           ))}

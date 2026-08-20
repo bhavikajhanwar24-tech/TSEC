@@ -168,12 +168,13 @@ def fetch_issue_series(owner: str, repo: str, weeks: int, max_issues: int = 500)
                     continue
                 info = commenters.get(user)
                 if info is None:
-                    info = {"count": 0, "last_active": datetime.min.replace(tzinfo=timezone.utc), "first_active": datetime.max.replace(tzinfo=timezone.utc)}
+                    info = {"count": 0, "last_active": datetime.min.replace(tzinfo=timezone.utc), "first_active": datetime.max.replace(tzinfo=timezone.utc), "last_comment_url": ""}
                     commenters[user] = info
                     new_by_week[_week_key(cdt)] += 1
                 info["count"] += 1
                 if cdt > info["last_active"]:
                     info["last_active"] = cdt
+                    info["last_comment_url"] = comment.get("html_url", "")
                 if cdt < info["first_active"]:
                     info["first_active"] = cdt
                 commenters[user] = info
@@ -293,6 +294,9 @@ def build_weekly_series(raw: Dict[str, Any], weeks: int) -> Dict[str, List[float
 
     dup_rate = [round(d / c * 100, 1) if c > 0 else 0.0 for d, c in zip(dup_closed, closed)]
 
+    # close/open ratio: issues closed per week vs. issues opened that week
+    close_ratio = [round(c / o, 2) if o > 0 else 0.0 for o, c in zip(opened, closed)]
+
     # PR merge latency per week (median days), 0 when no merges that week
     pr_latency = [0.0] * weeks
     pr_by_week = raw.get("pr_merge_by_week", {})
@@ -306,6 +310,7 @@ def build_weekly_series(raw: Dict[str, Any], weeks: int) -> Dict[str, List[float
         "duplicate_rate": dup_rate,
         "incoming_volume": opened,
         "issues_closed": closed,
+        "close_open_ratio": close_ratio,
         "active_contributors": contrib,
         "new_contributors": new_contrib,
         "pr_merge_latency_days": pr_latency,
@@ -328,6 +333,7 @@ def detect_trends(series: Dict[str, List[float]], labels: List[str]) -> List[Dic
         "incoming_volume": {"higher_is_worse": True, "threshold": 1.5, "display": "incoming issue volume"},
         "active_contributors": {"higher_is_worse": False, "threshold": 0.67, "display": "active contributors"},
         "pr_merge_latency_days": {"higher_is_worse": True, "threshold": 1.5, "display": "PR merge latency"},
+        "close_open_ratio": {"higher_is_worse": False, "threshold": 0.67, "display": "issue close rate"},
     }
     trends = []
     for metric, values in series.items():
@@ -565,6 +571,21 @@ def node_drill_down(state: AgentState) -> AgentState:
     return {**state, "chunks": chunks, "retrieved": retrieved}
 
 
+def _contributor_matrix(raw: Dict[str, Any], labels: List[str]) -> List[Dict[str, Any]]:
+    """Week x contributor activity matrix (1 = commented that week) for the
+    heatmap. Top contributors by comment count, capped for readability."""
+    by_week = raw.get("commenters_by_week", {})
+    commenters = raw.get("commenters", {})
+    users = sorted(commenters.keys(), key=lambda u: -commenters[u]["count"])[:10]
+    return [
+        {
+            "login": user,
+            "weeks": [1 if user in by_week.get(label, set()) else 0 for label in labels],
+        }
+        for user in users
+    ]
+
+
 def _contributor_activity(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Per-contributor activity summary for the UI and the capacity analysis.
     `inactive` means no comment in the last 14 days."""
@@ -578,6 +599,7 @@ def _contributor_activity(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "comments": info["count"],
                 "last_active_days_ago": days_ago,
                 "inactive": days_ago >= 14,
+                "last_comment_url": info.get("last_comment_url", ""),
             }
         )
     rows.sort(key=lambda r: (not r["inactive"], r["last_active_days_ago"], -r["comments"]))
@@ -618,7 +640,8 @@ def _heuristic_synthesize(state: AgentState) -> Dict[str, Any]:
             "feeds_weekly_brief": True,
             "series": series,
             "week_labels": labels,
-            "contributor_activity": contrib_rows,
+"contributor_activity": contrib_rows,
+            "contributor_matrix": _contributor_matrix(state.get("raw", {}), state["week_labels"]),
         }
 
     worst = trends[0]
@@ -691,7 +714,8 @@ def _heuristic_synthesize(state: AgentState) -> Dict[str, Any]:
         "feeds_weekly_brief": True,
         "series": series,
         "week_labels": labels,
-        "contributor_activity": contrib_rows,
+"contributor_activity": contrib_rows,
+        "contributor_matrix": _contributor_matrix(state.get("raw", {}), state["week_labels"]),
     }
 
 
@@ -727,6 +751,7 @@ def node_synthesize(state: AgentState) -> AgentState:
         parsed["series"] = state["series"]
         parsed["week_labels"] = state["week_labels"]
         parsed["contributor_activity"] = baseline["contributor_activity"]
+        parsed["contributor_matrix"] = baseline["contributor_matrix"]
         parsed["health_score"] = baseline["health_score"]
         parsed["health_status"] = baseline["health_status"]
         return {**state, "status": "complete", "result": {"status": "complete", **parsed}}

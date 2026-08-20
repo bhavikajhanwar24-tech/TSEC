@@ -325,6 +325,20 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .health-chart-heading span { color: var(--muted); font-family: 'Space Grotesk', sans-serif; font-size: 12px; }
 .health-chart { display: block; height: auto; width: 100%; }
 .health-chart-labels { color: var(--muted); display: flex; font-size: 10px; justify-content: space-between; margin-top: 3px; }
+.health-chart-badge { background: var(--warning); border-radius: 9px; color: #141414; font-size: 9px; font-style: normal; margin-left: 6px; padding: 1px 6px; vertical-align: 1px; }
+.heatmap-grid { display: grid; gap: 2px; overflow-x: auto; }
+.heatmap-cell { font-size: 10px; }
+.heatmap-head { color: var(--muted); font-size: 9px; text-align: center; }
+.heatmap-user { color: var(--text); overflow: hidden; padding: 1px 4px; text-overflow: ellipsis; white-space: nowrap; }
+.heatmap-dot { background: #1f2733; border-radius: 2px; height: 12px; }
+.heatmap-dot.active { background: #a78bfa; }
+.snapshot-table { display: flex; flex-direction: column; gap: 2px; overflow-x: auto; }
+.snapshot-row { display: grid; font-size: 10px; grid-template-columns: 110px repeat(auto-fit, minmax(38px, 1fr)); gap: 2px; }
+.snapshot-row span { background: rgba(255,255,255,0.03); padding: 3px 6px; text-align: right; white-space: nowrap; }
+.snapshot-row span:first-child { background: transparent; color: var(--muted); text-align: left; }
+.snapshot-head span { color: var(--muted); text-align: center; }
+.last-comment-link { color: var(--accent); font-size: 11px; margin-left: 6px; text-decoration: none; }
+.last-comment-link:hover { text-decoration: underline; }
 .health-narrative { font-size: 15px; line-height: 1.55; }
 .evidence-mark.inactive { color: var(--warning); }
 .backlog-detail { margin-top: 4px; }
