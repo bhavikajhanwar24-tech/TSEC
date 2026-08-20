@@ -69,10 +69,14 @@ app.use(
   })
 );
 
+app.get("/deployment-check", (req, res) => {
+  res.json({ service: "repoguardian-backend", version: "webhook-v2", ok: true });
+});
+
 app.use("/auth", authRoutes);
+app.use("/api/webhooks", webhookRoutes);
 app.use("/api", apiRoutes);
 app.use("/api/agents", agentRoutes);
-app.use("/api/webhooks", webhookRoutes);
 app.get("/health", (req, res) => res.json({ ok: true }));
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

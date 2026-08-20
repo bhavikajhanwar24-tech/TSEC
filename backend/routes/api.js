@@ -24,6 +24,7 @@ async function fetchCodeFrequency(url, headers) {
 }
 
 function requireAuth(req, res, next) {
+  if (req.path.startsWith("/webhooks")) return next();
   if (!req.session.githubToken) {
     return res.status(401).json({ error: "Not authenticated" });
   }
