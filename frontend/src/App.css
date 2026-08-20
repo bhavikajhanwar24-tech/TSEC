@@ -208,6 +208,21 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .chat-role { color: var(--muted); display: block; font-size: 10px; font-weight: 700; letter-spacing: .08em; margin-bottom: 4px; text-transform: uppercase; }
 .chat-message p { color: var(--ink); font-size: 13px; margin: 0; white-space: pre-wrap; }
 .chat-loading { color: var(--muted) !important; }
+
+.escalation-card { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--muted); border-radius: 10px; padding: 20px; }
+.escalation-card h2 { font-size: 19px; margin: 0 0 9px; }
+.escalation-card p:not(.eyebrow) { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0; }
+.escalation-card.attention { border-left-color: var(--danger); }
+.escalation-card.attention h2 { color: var(--danger); }
+.escalation-card.handled { border-left-color: var(--success); }
+.escalation-card.handled h2 { color: var(--success); }
+.escalation-card.pending { border-left-color: var(--warning); }
+.notification-confirmation { color: var(--success); display: block; font-size: 11px; font-weight: 700; margin-top: 12px; }
+.escalation-sidebar-badge { border-radius: 12px; display: inline-block; font-size: 10px; margin-top: 5px; padding: 5px 8px; width: fit-content; }
+.escalation-sidebar-badge.attention { background: rgba(237, 124, 112, .18); color: var(--danger); }
+.escalation-sidebar-badge.handled { background: rgba(107, 193, 145, .18); color: var(--success); }
+.analysis-overview-grid { grid-template-columns: minmax(0, 1.35fr) minmax(190px, .75fr) minmax(220px, .9fr); }
+@media (max-width: 800px) { .analysis-overview-grid { grid-template-columns: 1fr; } }
 .chat-sources { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
 .chat-sources span { background: var(--surface-soft); border: 1px solid var(--line); border-radius: 10px; color: var(--muted); font-size: 10px; padding: 4px 7px; }
 .chat-form { align-items: flex-end; display: flex; gap: 10px; margin-top: 14px; }

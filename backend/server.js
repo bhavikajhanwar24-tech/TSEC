@@ -6,6 +6,7 @@ const authRoutes = require("./routes/auth");
 const apiRoutes = require("./routes/api");
 const agentRoutes = require("./routes/agents");
 const webhookRoutes = require("./routes/webhooks");
+const escalationRoutes = require("./routes/escalation");
 
 dotenv.config();
 
@@ -75,6 +76,7 @@ app.get("/deployment-check", (req, res) => {
 
 app.use("/auth", authRoutes);
 app.use("/api/webhooks", webhookRoutes);
+app.use("/api/issues", escalationRoutes);
 app.use("/api", apiRoutes);
 app.use("/api/agents", agentRoutes);
 app.get("/health", (req, res) => res.json({ ok: true }));

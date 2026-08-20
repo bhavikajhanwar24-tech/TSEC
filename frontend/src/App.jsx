@@ -513,6 +513,7 @@ function CentralAnalysisDashboard({
   failed,
   error,
   notTriggered,
+  escalation,
   onClose,
 }) {
   const [activeAgent, setActiveAgent] = useState("sensitivity");
@@ -571,6 +572,15 @@ function CentralAnalysisDashboard({
               <span className="issue-number">#{issue.number}</span>
               <strong>{issue.title}</strong>
               <span>{issue.user?.login || "Issue reporter"}</span>
+              {escalation && !escalation.pending && (
+                <span
+                  className={`escalation-sidebar-badge ${escalation.needsAttention ? "attention" : "handled"}`}
+                >
+                  {escalation.needsAttention
+                    ? "Needs attention"
+                    : "Auto-handled"}
+                </span>
+              )}
             </div>
             <nav className="analysis-agent-nav" aria-label="Agent analyses">
               {agents.map((agent) => (
@@ -656,6 +666,53 @@ function CentralAnalysisDashboard({
                           ? "Security concern detected"
                           : "No security concern detected"}
                     </p>
+                  </article>
+                  <article
+                    className={`escalation-card ${escalation?.needsAttention ? "attention" : escalation?.pending === false ? "handled" : "pending"}`}
+                  >
+                    <p className="eyebrow">Escalation status</p>
+                    {escalation?.pending !== false ? (
+                      <>
+                        <h2>
+                          Waiting on{" "}
+                          {escalation?.missingCategories?.length ||
+                            agents.filter(
+                              (agent) => agent.status !== "complete",
+                            ).length}{" "}
+                          more agents
+                        </h2>
+                        <p>
+                          Maintainer attention will be evaluated after all six
+                          agent reports arrive.
+                        </p>
+                      </>
+                    ) : escalation.needsAttention ? (
+                      <>
+                        <h2>Needs Maintainer Attention</h2>
+                        <p>
+                          Triggered by:{" "}
+                          {escalation.triggeringCategories
+                            .join(", ")
+                            .replaceAll("_", " ")}{" "}
+                          · {Math.round(escalation.aggregateConfidence * 100)}%
+                          aggregate confidence
+                        </p>
+                        {escalation.notificationSent && (
+                          <small className="notification-confirmation">
+                            ✓ Maintainers notified via email
+                          </small>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <h2>Auto-handled</h2>
+                        <p>
+                          No action needed ·{" "}
+                          {Math.round(escalation.aggregateConfidence * 100)}%
+                          aggregate confidence
+                        </p>
+                      </>
+                    )}
                   </article>
                 </section>
                 <section className="analysis-metric-strip">
@@ -756,6 +813,7 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
   const [analysis, setAnalysis] = useState(null);
   const [error, setError] = useState("");
   const [notTriggered, setNotTriggered] = useState(false);
+  const [escalation, setEscalation] = useState(null);
 
   useEffect(() => {
     function handleKeyDown(event) {
@@ -772,6 +830,11 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
           setAnalysis(result);
           setError("");
           setNotTriggered(false);
+          if (result.issue?.id) {
+            api(`/api/issues/${result.issue.id}/escalation`)
+              .then(setEscalation)
+              .catch(() => setEscalation(null));
+          }
         }
       } catch (requestError) {
         if (
@@ -826,6 +889,7 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
         failed={failed}
         error={error}
         notTriggered={notTriggered}
+        escalation={escalation}
         onClose={onClose}
       />
     );
@@ -1063,10 +1127,15 @@ function RepositoryOverviewDashboard({
               </button>
             ))}
           </nav>
-          <RepositoryChatButton onClick={() => setChatOpen((open) => !open)} active={chatOpen} />
+          <RepositoryChatButton
+            onClick={() => setChatOpen((open) => !open)}
+            active={chatOpen}
+          />
         </aside>
         <main className="repo-dashboard-main">
-          {chatOpen && <RepositoryChat owner={repo.owner.login} repo={repo.name} />}
+          {chatOpen && (
+            <RepositoryChat owner={repo.owner.login} repo={repo.name} />
+          )}
           <header className="repo-dashboard-topbar">
             <div>
               <p className="eyebrow">Repository overview</p>
@@ -1414,10 +1483,15 @@ function RepositoryTabDashboard({
               </button>
             ))}
           </nav>
-          <RepositoryChatButton onClick={() => setChatOpen((open) => !open)} active={chatOpen} />
+          <RepositoryChatButton
+            onClick={() => setChatOpen((open) => !open)}
+            active={chatOpen}
+          />
         </aside>
         <main className="repo-dashboard-main">
-          {chatOpen && <RepositoryChat owner={repo.owner.login} repo={repo.name} />}
+          {chatOpen && (
+            <RepositoryChat owner={repo.owner.login} repo={repo.name} />
+          )}
           <header className="repo-dashboard-topbar">
             <div>
               <p className="eyebrow">Repository workspace</p>
