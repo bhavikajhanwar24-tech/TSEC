@@ -124,7 +124,20 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     const { name, result } = stepResult;
     if (name === "duplicate" && result.is_direct_duplicate) {
       const match = result.matches?.find((item) => item.classification === "direct_duplicate");
-      const comment = `This issue appears to duplicate #${match?.issue_number || "an existing issue"}. Duplicate analysis found a matching open issue: ${match?.url || ""}`;
+      const reporter = issue.user?.login ? `@${issue.user.login}` : "there";
+      const evidence = (match?.evidence || []).map((e) => `- ${e}`).join("\n");
+      const why = evidence || `- ${result.recommendation || "the issue reports the same problem as an existing issue"}`;
+      const title = match?.title ? `: "${match.title}"` : "";
+      const comment = [
+        `Hi ${reporter} — this issue was closed as a duplicate of **#${match?.issue_number || "an existing issue"}**${title}.`,
+        "",
+        "Why it was closed:",
+        why,
+        "",
+        match?.url ? `Original issue: ${match.url}` : null,
+        "",
+        "Please follow the original issue for updates. If you believe this is not a duplicate, reopen the issue and explain what differs.",
+      ].filter(Boolean).join("\n");
       await githubIssueAction(owner, repo, issue.number, token, "COMMENT", { body: comment });
       await githubIssueAction(owner, repo, issue.number, token, "PATCH", { state: "closed", state_reason: "duplicate" });
       record.status = "stopped_duplicate";
