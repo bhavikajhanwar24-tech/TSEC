@@ -1,3 +1,4 @@
+.github-mark { fill: currentColor; height: 16px; width: 16px; }
 .nav-agent-icon.contributor { border-color: var(--accent); color: var(--accent); }
 .contributor-section { display: grid; gap: 14px; }
 .contributor-section .contributor-match-panel { margin-top: 0; }
