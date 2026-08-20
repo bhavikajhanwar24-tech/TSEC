@@ -2834,6 +2834,7 @@ function RepositoryTabDashboard({
   } = details;
   const [selectedIssue, setSelectedIssue] = useState(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [escalationFilter, setEscalationFilter] = useState("all");
   const openIssues = issues.filter(
     (issue) => !issue.pull_request && issue.state === "open",
   );
