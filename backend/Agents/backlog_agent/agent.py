@@ -163,13 +163,13 @@ def analyze_issue_node(state: AgentState) -> Dict[str, Any]:
     analysis = None
     if not is_mock:
         try:
-            model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
+            model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
             print(f"[INFO] Analyzing Issue #{issue.get('number')} using NVIDIA Model: {model_name}...")
             llm = ChatNVIDIA(
                 model=model_name,
                 api_key=api_key,
                 temperature=0.1,
-                max_tokens=4096
+                max_completion_tokens=4096
             )
             structured_llm = llm.with_structured_output(IssueAnalysis)
             
