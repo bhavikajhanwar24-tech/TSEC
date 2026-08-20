@@ -2832,7 +2832,7 @@ function RepositoryTabDashboard({
   const openPulls = pulls.filter((pull) => pull.state === "open");
   const escalationIssues = issues.filter(
     (issue) =>
-      !issue.pull_request && Boolean(escalationDecisions[issue.number]),
+      !issue.pull_request && escalationDecisions[issue.number]?.needsAttention === true,
   );
   const filteredEscalationIssues = escalationIssues.filter((issue) => {
     const decision = escalationDecisions[issue.number] || {};

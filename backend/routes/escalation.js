@@ -13,7 +13,7 @@ router.get("/:owner/:repo/escalations", async (req, res) => {
   if (!req.session?.githubToken) return res.status(401).json({ error: "Not authenticated" });
   try {
     const decisions = await EscalationDecision.findAll({
-      where: {},
+      where: { needsAttention: true },
       include: [{ model: require("../models").Issue, as: "issue", where: { repoFullName: `${req.params.owner}/${req.params.repo}` }, include: [{ association: "agentRuns" }, { association: "timelines" }] }],
       order: [["createdAt", "DESC"]],
     });
