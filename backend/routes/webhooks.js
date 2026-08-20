@@ -103,18 +103,29 @@ router.get("/analysis/:owner/:repo/:number", async (req, res) => {
   let record = getAnalysis(req.params.owner, req.params.repo, req.params.number);
   if (!record) {
     try {
-      const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/issues/${req.params.number}`, {
+      const issueUrl = `https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/issues/${encodeURIComponent(req.params.number)}`;
+      const response = await fetch(issueUrl, {
         headers: {
           Authorization: `Bearer ${req.session.githubToken}`,
           Accept: "application/vnd.github+json",
           "User-Agent": "RepoGuardian",
         },
       });
-      if (!response.ok) return res.status(response.status).json({ error: "Issue not found" });
+      if (!response.ok) {
+        const body = await response.text();
+        console.error("Issue analysis source request failed:", response.status, body);
+        return res.status(response.status).json({ error: `GitHub issue request failed (${response.status})`, details: body });
+      }
       const issue = await response.json();
       if (issue.pull_request || issue.state !== "open") return res.status(400).json({ error: "Automatic analysis is available for open issues only" });
-      record = createAnalysis(issue, { owner: { login: req.params.owner }, name: req.params.repo }, req.session.githubToken);
+      try {
+        record = createAnalysis(issue, { owner: { login: req.params.owner }, name: req.params.repo }, req.session.githubToken);
+      } catch (error) {
+        console.error("Issue analysis start failed:", error);
+        return res.status(500).json({ error: `Could not start analysis: ${error.message}` });
+      }
     } catch (error) {
+      console.error("Issue analysis request failed:", error);
       return res.status(500).json({ error: `Could not start analysis: ${error.message}` });
     }
   }
