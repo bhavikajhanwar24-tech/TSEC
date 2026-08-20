@@ -23,15 +23,20 @@ function runAgent(agentDir, script, args, stdinPayload, env, timeoutMs = DEFAULT
     const pythonCommand = process.env.PYTHON_BIN || (process.platform === "win32" ? "python" : path.join(__dirname, "..", ".venv", "bin", "python"));
     const child = spawn(pythonCommand, [script, ...args], {
       cwd: agentDir,
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...env, PYTHONUNBUFFERED: "1" },
       windowsHide: true,
+      detached: process.platform !== "win32",
     });
 
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error("agent timed out"));
+      if (process.platform === "win32") {
+        spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
+      } else if (child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+      }
+      reject(new Error(`agent timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
     child.stdout.on("data", (d) => (stdout += d));
@@ -43,7 +48,7 @@ function runAgent(agentDir, script, args, stdinPayload, env, timeoutMs = DEFAULT
     child.on("close", (code) => {
       clearTimeout(timer);
       if (code !== 0) {
-        return reject(new Error(stderr.trim() || `agent exited with code ${code}`));
+        return reject(new Error(stderr.trim() || `agent exited with code ${code}; stdout: ${stdout.slice(-500)}`));
       }
       resolve({ stdout, stderr });
     });
