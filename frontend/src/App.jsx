@@ -2614,14 +2614,37 @@ function RepositoryOverviewDashboard({
     1,
     priorityCounts.High + priorityCounts.Medium + priorityCounts.Low,
   );
-  const categoryCounts = issues.reduce((counts, issue) => {
-    const label = issue.labels?.[0]?.name || "Other";
-    counts[label] = (counts[label] || 0) + 1;
+  const categoryNames = [
+    "Bug",
+    "Documentation",
+    "Feature Request",
+    "Question",
+    "Other",
+  ];
+  const categoryAliases = {
+    bug: "Bug",
+    documentation: "Documentation",
+    docs: "Documentation",
+    "feature request": "Feature Request",
+    feature_request: "Feature Request",
+    question: "Question",
+  };
+  const trackedIssues = issues.filter((issue) => !issue.pull_request);
+  const categoryCounts = trackedIssues.reduce((counts, issue) => {
+    const labels = (issue.labels || [])
+      .map((label) => String(label.name || label).trim().toLowerCase())
+      .map((label) => categoryAliases[label])
+      .filter(Boolean);
+    const category = labels[0] || "Other";
+    counts[category] += 1;
     return counts;
-  }, {});
-  const topCategories = Object.entries(categoryCounts)
-    .sort(([, first], [, second]) => second - first)
-    .slice(0, 5);
+  }, Object.fromEntries(categoryNames.map((category) => [category, 0])));
+  const topCategories = categoryNames.map((category) => ({
+    name: category,
+    percentage: trackedIssues.length
+      ? Math.round((categoryCounts[category] / trackedIssues.length) * 100)
+      : 0,
+  }));
   const chartPoints = codeFrequency.slice(-12);
   const chartMax = Math.max(
     ...chartPoints.map((point) =>
@@ -2805,28 +2828,21 @@ function RepositoryOverviewDashboard({
                 </div>
                 <span>{issues.length} tracked</span>
               </div>
-              {topCategories.length ? (
-                <div className="category-list">
-                  {topCategories.map(([category, count]) => (
-                    <div className="category-row" key={category}>
-                      <strong>{category}</strong>
+              <div className="category-list">
+                {topCategories.map(({ name, percentage }) => (
+                    <div className="category-row" key={name}>
+                      <strong>{name}</strong>
                       <div>
                         <span
                           style={{
-                            width: `${(count / Math.max(1, topCategories[0][1])) * 100}%`,
+                            width: `${percentage}%`,
                           }}
                         />
                       </div>
-                      <b>
-                        {Math.round((count / Math.max(1, issues.length)) * 100)}
-                        %
-                      </b>
+                      <b>{percentage}%</b>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <EmptyState>No issue categories yet.</EmptyState>
-              )}
+                ))}
+              </div>
             </article>
             <article className="repo-dashboard-card recent-card">
               <div className="dashboard-card-heading">
