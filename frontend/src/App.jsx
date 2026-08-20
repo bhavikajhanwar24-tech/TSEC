@@ -619,9 +619,139 @@ function BacklogDetail({ result }) {
       {result.report && (
         <details className="backlog-report">
           <summary>Sweep report (markdown)</summary>
-          <pre>{result.report}</pre>
+          <Markdown text={result.report} />
         </details>
       )}
+    </div>
+  );
+}
+
+function renderInline(text) {
+  const tokens = String(text).split(
+    /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g,
+  );
+  return tokens.map((token, i) => {
+    if (token.startsWith("**") && token.endsWith("**") && token.length > 4)
+      return <strong key={i}>{token.slice(2, -2)}</strong>;
+    if (token.startsWith("`") && token.endsWith("`") && token.length > 2)
+      return (
+        <code key={i}>{token.slice(1, -1)}</code>
+      );
+    const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (link)
+      return (
+        <a key={i} href={link[2]} target="_blank" rel="noreferrer">
+          {link[1]}
+        </a>
+      );
+    return token;
+  });
+}
+
+function Markdown({ text }) {
+  if (!text) return null;
+  const lines = String(text).replace(/\r/g, "").split("\n");
+  const blocks = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^```/.test(line)) {
+      const code = [];
+      i += 1;
+      while (i < lines.length && !/^```/.test(lines[i])) {
+        code.push(lines[i]);
+        i += 1;
+      }
+      i += 1;
+      blocks.push(
+        <pre className="md-code" key={blocks.length}>
+          <code>{code.join("\n")}</code>
+        </pre>,
+      );
+      continue;
+    }
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
+    if (heading) {
+      const level = heading[1].length;
+      const Tag = level === 1 ? "h4" : level === 2 ? "h5" : "h6";
+      blocks.push(
+        <Tag className="md-heading" key={blocks.length}>
+          {renderInline(heading[2])}
+        </Tag>,
+      );
+      i += 1;
+      continue;
+    }
+    if (/^\s*(---+|\*\*\*+)\s*$/.test(line)) {
+      blocks.push(<hr className="md-rule" key={blocks.length} />);
+      i += 1;
+      continue;
+    }
+    if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
+        items.push(
+          <li key={items.length}>
+            {renderInline(lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, ""))}
+          </li>,
+        );
+        i += 1;
+      }
+      blocks.push(
+        <ul className="md-list" key={blocks.length}>
+          {items}
+        </ul>,
+      );
+      continue;
+    }
+    if (!line.trim()) {
+      i += 1;
+      continue;
+    }
+    blocks.push(
+      <p className="md-paragraph" key={blocks.length}>
+        {renderInline(line)}
+      </p>,
+    );
+    i += 1;
+  }
+  return <div className="md-block">{blocks}</div>;
+}
+
+function AgentCardSummary({ agent }) {
+  const result = agent.result || {};
+  const highlights = resultHighlights(result);
+  const evidence = resultEvidence(result);
+  const recommendation =
+    result.recommendation ||
+    result.summary ||
+    result.reasoning ||
+    result.draft_comment ||
+    result.report;
+  return (
+    <div className="agent-card-summary">
+      {highlights.length > 0 && (
+        <div className="result-highlights">
+          {highlights.map((highlight) => (
+            <span key={highlight}>{highlight}</span>
+          ))}
+        </div>
+      )}
+      {recommendation && <Markdown text={recommendation} />}
+      {evidence.length > 0 && (
+        <ul className="md-list">
+          {evidence.slice(0, 3).map((item, i) => (
+            <li key={i}>{renderInline(String(item))}</li>
+          ))}
+        </ul>
+      )}
+      {agent.key === "backlog" &&
+        Array.isArray(result.analysis_results) && (
+          <p className="card-note">
+            {result.analysis_results.length} issues analyzed — open the agent
+            detail for recommended actions.
+          </p>
+        )}
     </div>
   );
 }
@@ -649,12 +779,14 @@ function AgentResultDetail({ agent }) {
         </div>
       )}
       {recommendation && (
-        <p className="result-recommendation">{recommendation}</p>
+        <div className="result-recommendation">
+          <Markdown text={recommendation} />
+        </div>
       )}
       {agent.key === "health" && result.health_summary && (
-        <p className="result-recommendation health-narrative">
-          {result.health_summary}
-        </p>
+        <div className="result-recommendation health-narrative">
+          <Markdown text={result.health_summary} />
+        </div>
       )}
       {agent.key === "backlog" &&
         (result.analysis_results || result.report) && (
@@ -690,7 +822,11 @@ function AgentResultDetail({ agent }) {
             <div className="evidence-row" key={String(item)}>
               <span className="evidence-mark">✓</span>
               <span>
-                {typeof item === "string" ? item : JSON.stringify(item)}
+                {typeof item === "string" ? (
+                  renderInline(item)
+                ) : (
+                  <Markdown text={JSON.stringify(item)} />
+                )}
               </span>
             </div>
           ))}
@@ -1180,9 +1316,9 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
               <section className="decision-panel missing-panel">
                 <p className="eyebrow">Missing information</p>
                 <h3>Waiting for reporter details</h3>
-                <p>
-                  {missing.draft_comment || missing.missing_details?.join(", ")}
-                </p>
+                <Markdown
+                  text={missing.draft_comment || missing.missing_details?.join(", ")}
+                />
               </section>
             )}
             {sensitivity && (
@@ -1193,11 +1329,13 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
                     sensitivity.risk_level ||
                     "Security scan complete"}
                 </h3>
-                <p>
-                  {sensitivity.recommendation ||
+                <Markdown
+                  text={
+                    sensitivity.recommendation ||
                     sensitivity.summary ||
-                    "No additional security escalation was reported."}
-                </p>
+                    "No additional security escalation was reported."
+                  }
+                />
               </section>
             )}
             {error && <p className="detail-error">{error}</p>}
@@ -1219,9 +1357,7 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
                     </div>
                   )}
                   {agent.error && <p className="detail-error">{agent.error}</p>}
-                  {agent.result && (
-                    <pre>{JSON.stringify(agent.result, null, 2)}</pre>
-                  )}
+                  {agent.result && <AgentCardSummary agent={agent} />}
                 </article>
               ))}
             </div>

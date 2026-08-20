@@ -307,3 +307,16 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .backlog-report { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
 .backlog-report summary { color: var(--muted); cursor: pointer; font-size: 11px; }
 .backlog-report pre { background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 11px; line-height: 1.55; margin: 10px 0 0; max-height: 260px; overflow: auto; padding: 12px; white-space: pre-wrap; }
+.md-block { font-size: 13px; line-height: 1.6; }
+.md-block h4.md-heading, .md-block h5.md-heading, .md-block h6.md-heading { color: var(--ink); margin: 12px 0 4px; }
+.md-block .md-paragraph { margin: 0 0 8px; }
+.md-block .md-list { margin: 0 0 8px; padding-left: 18px; }
+.md-block .md-list li { margin: 2px 0; }
+.md-block .md-rule { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+.md-block code { background: var(--surface-soft); border-radius: 4px; font-size: 11px; padding: 1px 5px; }
+.md-block .md-code { background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; overflow: auto; padding: 10px; }
+.md-block .md-code code { background: none; padding: 0; }
+.agent-card-summary { margin-top: 10px; }
+.agent-card-summary .result-highlights { margin-bottom: 8px; }
+.card-note { color: var(--muted); font-size: 11px; margin: 8px 0 0; }
+.agent-card-summary .result-recommendation { margin-bottom: 10px; }
