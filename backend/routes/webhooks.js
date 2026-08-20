@@ -31,6 +31,14 @@ function isHumanIssueComment(payload) {
   return Boolean(sender) && sender.type !== "Bot" && sender.type !== "Integration";
 }
 
+function needsDuplicateEvidence(result) {
+  return Boolean(
+    result &&
+    !result.is_direct_duplicate &&
+    (result.suggested_action === "request_reproduction" || result.evidence_gaps?.length)
+  );
+}
+
 async function getPersistedAnalysis(owner, repo, number) {
   try {
     const { Issue } = require("../models");
@@ -111,7 +119,9 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
   ];
   let nextStep = record.step;
   async function runStep([name, dir, script, args, payload, timeoutMs]) {
-    if (record.agents[name]?.status === "complete" && !(name === "missingInfo" && record.resumeMissingInfo)) return null;
+    const rerun = (name === "duplicate" && record.resumeDuplicate) ||
+      (name === "missingInfo" && (record.resumeMissingInfo || record.forceMissingInfo));
+    if (record.agents[name]?.status === "complete" && !rerun) return null;
     const step = ++nextStep;
     record.step = step;
     await saveWorkflow(record.issueRecord, { step, status: "running", output: record });
@@ -145,11 +155,28 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
       await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
       return;
     }
+    if (name === "duplicate" && needsDuplicateEvidence(result)) {
+      record.forceMissingInfo = true;
+    }
     if (name === "missingInfo" && result.missing_fields?.length) {
       if (result.draft_comment) await githubIssueAction(owner, repo, issue.number, token, "POST", { body: result.draft_comment });
-      record.status = "waiting_missing_info";
-      record.stopReason = "Missing information requested from the reporter.";
+      record.status = record.forceMissingInfo ? "waiting_duplicate_info" : "waiting_missing_info";
+      record.stopReason = record.forceMissingInfo
+        ? "More evidence is needed before confirming whether this is a duplicate."
+        : "Missing information requested from the reporter.";
       await saveAgentRun(record.issueRecord, { step: record.step, status: record.status }, name, result, record.status);
+      await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
+      return;
+    }
+    if (name === "missingInfo" && record.forceMissingInfo) {
+      const gaps = result.missing_details?.length
+        ? result.missing_details
+        : ["more reproduction steps, logs, or environment details to compare with the possible duplicate"];
+      await githubIssueAction(owner, repo, issue.number, token, "POST", {
+        body: `I need a little more detail before deciding whether this is a duplicate.\n\n${gaps.map((gap, index) => `${index + 1}. ${gap}`).join("\n")}\n\nPlease reply here with the missing details. I will re-check the duplicate comparison after your reply.`,
+      });
+      record.status = "waiting_duplicate_info";
+      record.stopReason = "More evidence is needed before confirming whether this is a duplicate.";
       await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
       return;
     }
@@ -173,6 +200,7 @@ async function createAnalysis(issue, repository, token, persisted) {
     agents: persisted?.agents || {},
     step: completedSteps,
     resumeMissingInfo: persisted?.status === "waiting_missing_info",
+    resumeDuplicate: persisted?.status === "waiting_duplicate_info",
   };
   Object.defineProperty(record, "issueRecord", { value: issueRecord, enumerable: false, writable: true });
   analyses.set(analysisKey(repository.owner.login, repository.name, issue.number), record);
@@ -283,7 +311,7 @@ router.post(["/github", "/"], async (req, res) => {
   if (existing?.status === "complete" || existing?.status === "stopped_duplicate") {
     return res.status(202).json({ accepted: true, processed: false, issue: issue.number });
   }
-  if (!isResume && existing?.status === "waiting_missing_info") {
+  if (!isResume && ["waiting_missing_info", "waiting_duplicate_info"].includes(existing?.status)) {
     return res.status(202).json({ accepted: true, processed: false, issue: issue.number });
   }
   const record = await createAnalysis(issue, repository, process.env.GITHUB_TOKEN, existing);
