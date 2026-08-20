@@ -39,10 +39,15 @@ let sessionStore;
 const databaseUrl = process.env.DATABASE_URL;
 if (databaseUrl && !databaseUrl.startsWith("your_")) {
   const PgSession = require("connect-pg-simple")(session);
-  sessionStore = new PgSession({
-    conString: process.env.DATABASE_URL,
-    createTableIfMissing: true,
+  const { Pool } = require("pg");
+  const pool = new Pool({
+    connectionString: databaseUrl,
     ssl: isHttps ? { rejectUnauthorized: false } : undefined,
+  });
+  pool.on("error", (error) => console.error("Postgres session pool error:", error));
+  sessionStore = new PgSession({
+    pool,
+    createTableIfMissing: true,
   });
 }
 
