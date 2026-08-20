@@ -294,3 +294,16 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .health-chart-labels { color: var(--muted); display: flex; font-size: 10px; justify-content: space-between; margin-top: 3px; }
 .health-narrative { font-size: 15px; line-height: 1.55; }
 .evidence-mark.inactive { color: var(--warning); }
+.backlog-detail { margin-top: 4px; }
+.backlog-action-list { display: grid; gap: 10px; }
+.backlog-action-card { background: var(--surface-soft); border: 1px solid var(--line); border-radius: 9px; padding: 12px 13px; }
+.backlog-action-heading { align-items: center; display: flex; gap: 10px; justify-content: space-between; margin-bottom: 6px; }
+.backlog-action-card p { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0; }
+.backlog-action-badge { border-radius: 20px; font-size: 10px; padding: 4px 9px; }
+.backlog-action-badge.danger { background: rgba(229, 72, 77, .14); color: var(--danger); }
+.backlog-action-badge.warning { background: rgba(229, 161, 60, .14); color: var(--warning); }
+.backlog-action-badge.ok { background: rgba(47, 158, 110, .14); color: var(--success); }
+.suggested-comment { background: var(--surface); border: 1px dashed var(--line); border-radius: 7px; color: var(--muted); font-family: 'Space Grotesk', sans-serif; font-size: 11px; line-height: 1.5; margin: 8px 0 0; overflow: auto; padding: 9px 11px; white-space: pre-wrap; }
+.backlog-report { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
+.backlog-report summary { color: var(--muted); cursor: pointer; font-size: 11px; }
+.backlog-report pre { background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 11px; line-height: 1.55; margin: 10px 0 0; max-height: 260px; overflow: auto; padding: 12px; white-space: pre-wrap; }

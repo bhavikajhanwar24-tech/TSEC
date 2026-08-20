@@ -430,6 +430,8 @@ function resultHighlights(result = {}) {
     );
   if (result.matches?.length)
     highlights.push(`${result.matches.length} related issue matches`);
+  if (result.issues_analyzed !== undefined)
+    highlights.push(`${result.issues_analyzed} issues analyzed`);
   return highlights;
 }
 
@@ -572,16 +574,70 @@ function HealthTrendDetail({ result }) {
   );
 }
 
+const BACKLOG_ACTIONS = {
+  auto_close: { label: "Auto-Close", icon: "⚠️", cls: "danger" },
+  nudge_reporter: { label: "Nudge Reporter", icon: "💬", cls: "warning" },
+  escalate: { label: "Escalate", icon: "🚨", cls: "danger" },
+  keep_open: { label: "Keep Open", icon: "✅", cls: "ok" },
+};
+
+function BacklogDetail({ result }) {
+  const items = result.analysis_results || [];
+  return (
+    <div className="backlog-detail">
+      {items.length > 0 && (
+        <div className="backlog-action-list">
+          {items.map((item) => {
+            const action =
+              BACKLOG_ACTIONS[item.action_recommendation] || {
+                label: item.action_recommendation || "Unknown",
+                icon: "•",
+                cls: "ok",
+              };
+            return (
+              <div className="backlog-action-card" key={item.issue_number}>
+                <div className="backlog-action-heading">
+                  <span className="issue-number">#{item.issue_number}</span>
+                  <span className={`backlog-action-badge ${action.cls}`}>
+                    {action.icon} {action.label}
+                  </span>
+                </div>
+                <p>
+                  {item.is_blocked
+                    ? `Blocked by ${item.blocked_by}`
+                    : "Not blocked"}{" "}
+                  — {item.reasoning}
+                </p>
+                {item.suggested_comment && (
+                  <pre className="suggested-comment">{item.suggested_comment}</pre>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {result.report && (
+        <details className="backlog-report">
+          <summary>Sweep report (markdown)</summary>
+          <pre>{result.report}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function AgentResultDetail({ agent }) {
   const result = agent.result || {};
   const evidence = resultEvidence(result);
   const highlights = resultHighlights(result);
   const recommendation =
-    result.recommendation ||
-    result.draft_comment ||
-    result.report ||
-    result.summary ||
-    result.reasoning;
+    agent.key === "backlog"
+      ? (result.summary || result.reasoning || "")
+      : (result.recommendation ||
+        result.draft_comment ||
+        result.report ||
+        result.summary ||
+        result.reasoning);
   const matches = result.matches?.slice(0, 4) || [];
   return (
     <div className="agent-detail-body">
@@ -600,6 +656,10 @@ function AgentResultDetail({ agent }) {
           {result.health_summary}
         </p>
       )}
+      {agent.key === "backlog" &&
+        (result.analysis_results || result.report) && (
+          <BacklogDetail result={result} />
+        )}
       {agent.key === "health" &&
         (result.series || result.contributor_activity) && (
           <HealthTrendDetail result={result} />
