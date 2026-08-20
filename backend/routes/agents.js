@@ -61,6 +61,10 @@ function extractJson(stdout) {
   return JSON.parse(stdout.slice(start));
 }
 
+function runAgentJob(agentDir, script, args, stdinPayload, env) {
+  return runAgent(agentDir, script, args, stdinPayload, env).then(({ stdout }) => extractJson(stdout));
+}
+
 // POST /api/agents/backlog-sweep
 // Body: { owner, repo, repoNorms }
 router.post("/backlog-sweep", requireAuth, async (req, res) => {
@@ -204,3 +208,4 @@ router.post("/sentiment-analysis", requireAuth, async (req, res) => {
 module.exports = router;
 module.exports.runAgent = runAgent;
 module.exports.extractJson = extractJson;
+module.exports.runAgentJob = runAgentJob;

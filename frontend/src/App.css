@@ -63,6 +63,9 @@ dt, .signal-list span { color: var(--muted); font-size: 13px; }
 dd, .signal-list strong { font-size: 13px; margin: 0; }
 .count-label { color: var(--muted); font-size: 12px; }
 .activity-row, .contributor-row { align-items: center; border-top: 1px solid var(--line); display: flex; gap: 13px; padding: 16px 0; }
+.issue-button { background: transparent; border-left: 0; border-right: 0; border-top: 1px solid var(--line); border-bottom: 0; color: inherit; text-align: left; width: 100%; }
+.issue-button:hover { background: #fbfcfe; }
+.issue-arrow { color: var(--blue); font-size: 18px; margin-left: auto; }
 .commit-button { background: transparent; border-left: 0; border-right: 0; border-top: 1px solid var(--line); border-bottom: 0; color: inherit; text-align: left; width: 100%; }
 .commit-button:hover { background: #fbfcfe; }
 .commit-chevron { color: var(--muted); font-size: 17px; margin-left: 8px; }
@@ -99,12 +102,42 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .error-banner, .error-page { background: #fff1f1; border: 1px solid #ffd2d2; border-radius: 8px; color: #b33b3b; padding: 14px; }
 .error-page { margin: 70px auto; max-width: 550px; text-align: center; }
 .error-page .outline-button { display: block; margin: 18px auto 0; }
+.analysis-overlay { background: rgba(24,32,43,.22); inset: 0; position: fixed; z-index: 8; }
+.analysis-drawer { background: #f7f8fa; box-shadow: -20px 0 60px rgba(24,32,43,.15); height: 100%; margin-left: auto; max-width: 760px; overflow: auto; padding: 36px; }
+.analysis-header { align-items: flex-start; display: flex; justify-content: space-between; }
+.analysis-header h2 { font-size: 28px; margin: 0 0 6px; }
+.analysis-header p:not(.eyebrow) { color: var(--muted); margin-bottom: 0; }
+.close-button { background: #fff; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); font-size: 24px; height: 36px; line-height: 1; width: 36px; }
+.analysis-issue { align-items: flex-start; background: #fff; border: 1px solid var(--line); border-radius: 11px; display: flex; gap: 14px; margin: 28px 0 16px; padding: 18px; }
+.issue-number { color: var(--blue); font-family: 'Space Grotesk', sans-serif; font-weight: 700; }
+.analysis-issue strong { display: block; font-size: 14px; margin-bottom: 6px; }
+.analysis-issue p { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 0; white-space: pre-wrap; }
+.analysis-summary { background: var(--ink); border-radius: 11px; color: #fff; display: grid; grid-template-columns: repeat(3, 1fr); margin-bottom: 18px; }
+.analysis-summary div { border-right: 1px solid rgba(255,255,255,.14); padding: 15px 17px; }
+.analysis-summary div:last-child { border: 0; }
+.analysis-summary strong, .analysis-summary span { display: block; }
+.analysis-summary strong { font-family: 'Space Grotesk', sans-serif; font-size: 21px; }
+.analysis-summary span { color: #b6c0ce; font-size: 11px; margin-top: 4px; }
+.agent-result-grid { display: grid; gap: 12px; }
+.agent-result-card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+.agent-card-heading { align-items: flex-start; display: flex; gap: 12px; justify-content: space-between; }
+.agent-result-card h3 { font-size: 14px; margin: 0 0 4px; }
+.agent-result-card p { color: var(--muted); font-size: 12px; line-height: 1.45; margin: 0; }
+.agent-status { border-radius: 12px; font-size: 10px; padding: 5px 8px; text-transform: capitalize; }
+.agent-status.complete { background: #eaf9f1; color: var(--green); }
+.agent-status.running { background: #eef2ff; color: var(--blue); }
+.agent-status.failed { background: #fff1f1; color: #b33b3b; }
+.agent-status.waiting { background: #f0f2f5; color: var(--muted); }
+.agent-progress { background: #edf1f6; border-radius: 5px; height: 4px; margin-top: 14px; overflow: hidden; }
+.agent-progress span { animation: progress 1.4s ease-in-out infinite; background: var(--blue); display: block; height: 100%; width: 40%; }
+.agent-result-card pre { background: #1e2530; border-radius: 7px; color: #d6deeb; font: 11px/1.55 Consolas, monospace; margin: 14px 0 0; max-height: 280px; overflow: auto; padding: 12px; white-space: pre-wrap; }
 .auth-shell { align-items: center; background: #fff; display: flex; justify-content: center; min-height: 100vh; padding: 30px; }
 .auth-card { max-width: 480px; text-align: center; }
 .auth-card .brand-symbol { margin-bottom: 26px; }
 .auth-card h1 { font-size: clamp(34px, 6vw, 56px); letter-spacing: -.06em; line-height: 1.06; margin: 0 0 18px; }
 .auth-card > p:not(.eyebrow) { color: var(--muted); line-height: 1.7; margin-bottom: 30px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes progress { 0% { transform: translateX(-120%); } 100% { transform: translateX(280%); } }
 .agents-panel { display: grid; gap: 18px; }
 .agent-grid { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; }
 .agent-runner { background: #fbfcfe; border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
@@ -123,3 +156,4 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 @media (max-width: 850px) { .agent-grid { grid-template-columns: 1fr; } }
 @media (max-width: 560px) { .agent-runner-head { flex-direction: column; } .agent-runner .outline-button { width: 100%; } .agent-issue-picker { align-items: flex-start; flex-direction: column; } .agent-issue-picker select { max-width: 100%; width: 100%; } }
 @media (max-width: 560px) { .app-header { padding: 0 20px; } .account span, .account a { display: none; } .dashboard, .detail-page { padding: 42px 20px 70px; } .dashboard-heading { align-items: flex-start; flex-direction: column; gap: 22px; } .repo-grid { grid-template-columns: 1fr; } .stats { display: grid; grid-template-columns: 1fr 1fr; } .stat { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); min-width: 0; } .stat:nth-child(2) { border-right: 0; } .stat:nth-child(3), .stat:nth-child(4) { border-bottom: 0; } .stat:nth-child(4) { border-right: 0; } .panel { padding: 18px; } .contribution-bar { width: 70px; } }
+@media (max-width: 560px) { .analysis-drawer { padding: 24px 18px; } .analysis-summary strong { font-size: 17px; } }
