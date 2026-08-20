@@ -172,7 +172,8 @@ function CommitRow({ commit, owner, repo }) {
 
 function ContributorRow({ contributor }) {
   const contributions = Number(contributor.contributions) || 0;
-  const login = contributor.login || contributor.name || "Anonymous contributor";
+  const login =
+    contributor.login || contributor.name || "Anonymous contributor";
   return (
     <article className="contributor-row">
       <Avatar src={contributor.avatar_url} alt={login} />
@@ -181,9 +182,7 @@ function ContributorRow({ contributor }) {
         <p>{contributions.toLocaleString()} contributions</p>
       </div>
       <div className="contribution-bar">
-        <span
-          style={{ width: `${Math.min(100, contributions / 2)}%` }}
-        />
+        <span style={{ width: `${Math.min(100, contributions / 2)}%` }} />
       </div>
     </article>
   );
@@ -390,7 +389,11 @@ const automaticAgents = [
     "Backlog context",
     "Places the issue in repository-wide work context.",
   ],
-  ["health", "Repository health", "Tracks response times, backlog, contributors, and trends."],
+  [
+    "health",
+    "Repository health",
+    "Tracks response times, backlog, contributors, and trends.",
+  ],
 ];
 
 function statusLabel(status) {
@@ -460,7 +463,9 @@ function TrendChart({ title, labels, values, color, format }) {
     <div className="health-chart-card">
       <div className="health-chart-heading">
         <strong>{title}</strong>
-        <span>{format ? format(safe[safe.length - 1]) : safe[safe.length - 1]}</span>
+        <span>
+          {format ? format(safe[safe.length - 1]) : safe[safe.length - 1]}
+        </span>
       </div>
       <svg
         viewBox={`0 0 ${w} ${h}`}
@@ -478,7 +483,13 @@ function TrendChart({ title, labels, values, color, format }) {
           strokeLinecap="round"
         />
         {pts.map(([x, y], i) => (
-          <circle key={i} cx={x.toFixed(1)} cy={y.toFixed(1)} r="2.4" fill={color}>
+          <circle
+            key={i}
+            cx={x.toFixed(1)}
+            cy={y.toFixed(1)}
+            r="2.4"
+            fill={color}
+          >
             <title>{`${labels[i]}: ${format ? format(safe[i]) : safe[i]}`}</title>
           </circle>
         ))}
@@ -1258,6 +1269,15 @@ function RepositoryOverviewDashboard({
                 {tab === "Pull requests" && <small>{pulls.length}</small>}
               </button>
             ))}
+            <button
+              className={activeTab === "Escalations" ? "active" : ""}
+              type="button"
+              onClick={() => setActiveTab("Escalations")}
+            >
+              <span className="repo-nav-icon">⚠</span>
+              Escalations
+              <small>{workflowIssues.length}</small>
+            </button>
           </nav>
           <RepositoryChatButton
             onClick={() => setChatOpen((open) => !open)}
@@ -1482,6 +1502,12 @@ function RepositoryTabDashboard({
     (issue) => !issue.pull_request && issue.state === "open",
   );
   const openPulls = pulls.filter((pull) => pull.state === "open");
+  const escalationIssues = issues.filter(
+    (issue) =>
+      !issue.pull_request &&
+      workflowStatuses[issue.number] &&
+      !["complete", "queued"].includes(workflowStatuses[issue.number]),
+  );
   const content = {
     Issues: (
       <div className="panel">
@@ -1506,6 +1532,30 @@ function RepositoryTabDashboard({
           ))}
         {!issues.filter((issue) => !issue.pull_request).length && (
           <EmptyState>No issues found.</EmptyState>
+        )}
+      </div>
+    ),
+    Escalations: (
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Maintainer queue</p>
+            <h2>Escalations</h2>
+          </div>
+          <span className="count-label">
+            {escalationIssues.length} need attention
+          </span>
+        </div>
+        {escalationIssues.map((issue) => (
+          <IssueRow
+            item={issue}
+            workflowStatus={workflowStatuses[issue.number]}
+            onClick={setSelectedIssue}
+            key={issue.id}
+          />
+        ))}
+        {!escalationIssues.length && (
+          <EmptyState>No active escalations.</EmptyState>
         )}
       </div>
     ),
@@ -1617,6 +1667,15 @@ function RepositoryTabDashboard({
                 {tab === "Pull requests" && <small>{pulls.length}</small>}
               </button>
             ))}
+            <button
+              className={activeTab === "Escalations" ? "active" : ""}
+              type="button"
+              onClick={() => setActiveTab("Escalations")}
+            >
+              <span className="repo-nav-icon">⚠</span>
+              Escalations
+              <small>{escalationIssues.length}</small>
+            </button>
           </nav>
           <RepositoryChatButton
             onClick={() => setChatOpen((open) => !open)}
@@ -1883,7 +1942,9 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
             {contributors.map((contributor, index) => (
               <ContributorRow
                 contributor={contributor}
-                key={contributor.id || contributor.login || `contributor-${index}`}
+                key={
+                  contributor.id || contributor.login || `contributor-${index}`
+                }
               />
             ))}
             {!contributors.length && (
