@@ -1,13 +1,18 @@
 import os
+import re
 from typing import List, Dict, Any, TypedDict
 from dotenv import load_dotenv
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field
+import requests
 
 # Load environment variables
 load_dotenv()
+
+GITHUB_API = "https://api.github.com"
+PRECEDENT_STOPWORDS = set("a an the to of for and or in on with about from at by vs replace change use using make made this that refactor into instead config configuration loading loader".split())
 
 # Define the Pydantic schema for Tone Analysis
 class ToneAnalysis(BaseModel):
@@ -29,6 +34,8 @@ class SentimentState(TypedDict):
     rag_precedents: List[Dict[str, Any]]
     analysis_results: Dict[str, Any]
     summary_report: str
+    owner: str
+    repo: str
 
 # System Prompt for Tone Analysis
 tone_prompt_template = ChatPromptTemplate.from_messages([
@@ -147,7 +154,7 @@ def analyze_activity_tone_node(state: SentimentState) -> Dict[str, Any]:
     analysis = None
     if not is_mock:
         try:
-            model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
+            model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b")
             print(f"[INFO] Analyzing PR/Issue #{pr.get('number')} tone using model: {model_name}...")
             llm = ChatNVIDIA(model=model_name, api_key=api_key, temperature=0.1)
             structured_llm = llm.with_structured_output(ToneAnalysis)
@@ -182,42 +189,53 @@ def analyze_activity_tone_node(state: SentimentState) -> Dict[str, Any]:
     }
 
 def search_precedents_node(state: SentimentState) -> Dict[str, Any]:
-    """Simulates a RAG precedent search over historical contentious threads."""
+    """Retrieves real historical precedents from the repo via GitHub search:
+    closed PRs/issues with titles overlapping the current dispute's keywords.
+    No data here is hardcoded — if retrieval is impossible it returns no
+    precedents rather than fabricating any."""
     pr = state["pr_or_issue"]
-    title = pr.get("title", "").lower()
-    description = pr.get("description", "").lower()
-    
-    # Simulated RAG Precedent Database
-    rag_database = [
-        {
-            "id": 298,
-            "year": 2023,
-            "title": "Change app settings serialization format to YAML",
-            "dispute": "Contributor wanted to move settings from JSON to YAML. Maintainer objected due to production backward-compatibility risks.",
-            "resolution": "The team resolved the dispute by keeping JSON as the default config layout, but introduced a compatibility shim layer that parses YAML format as an optional fall-back."
-        },
-        {
-            "id": 142,
-            "year": 2022,
-            "title": "Migrate assertion library in unit tests to Jest expect",
-            "dispute": "Core developers argued over Mocha assertions vs Jest assertions. Stalled on aesthetic preferences.",
-            "resolution": "Resolved by maintaining Mocha to minimize churn, but allowing Jest assertions in newly created test suites only."
-        }
-    ]
-    
-    print("[INFO] Querying simulated RAG precedent database...")
-    results = []
-    
-    # Simple semantic/keyword match simulator
-    query = title + " " + description
-    if "yaml" in query or "json" in query or "config" in query or "refactor" in query:
-        results.append(rag_database[0])
-    if "test" in query or "assert" in query:
-        results.append(rag_database[1])
-        
-    return {
-        "rag_precedents": results
+    owner = state.get("owner")
+    repo = state.get("repo")
+    token = os.environ.get("GITHUB_TOKEN", "")
+
+    if not (owner and repo and token):
+        return {"rag_precedents": []}
+
+    title_words = [w for w in re.findall(r"[a-z0-9]+", pr.get("title", "").lower()) if w not in PRECEDENT_STOPWORDS]
+    keywords = " ".join(title_words[:5]) or "bug"
+    query = f"repo:{owner}/{repo} type:pr state:closed {keywords} in:title"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "RepoGuardian-SentimentAgent",
     }
+    try:
+        response = requests.get(f"{GITHUB_API}/search/issues", params={"q": query, "per_page": 5}, headers=headers, timeout=30)
+        response.raise_for_status()
+        items = [i for i in response.json().get("items", []) if i["number"] != pr.get("number")]
+    except (requests.RequestException, ValueError):
+        return {"rag_precedents": []}
+
+    precedents = []
+    for item in items[:3]:
+        body = item.get("body") or "(no description)"
+        resolution = f"Closed on {item.get('closed_at', 'unknown')[:10]} as {item.get('state_reason') or item.get('state')}."
+        try:
+            comments = requests.get(item["comments_url"], headers=headers, timeout=30).json()
+            if comments:
+                resolution += f" Last comment: {comments[-1].get('body', '')[:200]}"
+        except requests.RequestException:
+            pass
+        precedents.append(
+            {
+                "id": item["number"],
+                "year": (item.get("created_at") or "")[:4],
+                "title": item["title"],
+                "dispute": body[:300],
+                "resolution": resolution,
+            }
+        )
+    return {"rag_precedents": precedents}
 
 def synthesize_findings_node(state: SentimentState) -> Dict[str, Any]:
     """Compares the current dispute analysis with past RAG precedents and writes a report."""
@@ -238,7 +256,7 @@ def synthesize_findings_node(state: SentimentState) -> Dict[str, Any]:
     synthesis = None
     if not is_mock:
         try:
-            model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
+            model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b")
             print(f"[INFO] Synthesizing findings and precedents using model: {model_name}...")
             llm = ChatNVIDIA(model=model_name, api_key=api_key, temperature=0.1)
             structured_llm = llm.with_structured_output(SynthesisResult)
@@ -270,10 +288,11 @@ def synthesize_findings_node(state: SentimentState) -> Dict[str, Any]:
         if precedents:
             p = precedents[0]
             summary = (
-                f"Unresolved disagreement: Contributor wants to refactor to YAML, but core reviewer raises backward compatibility concerns. "
-                f"A similar historical precedent exists in PR #{p['id']} ({p['year']}): '{p['title']}' where the team hit a similar roadblock."
+                f"Unresolved disagreement on '{pr.get('title')}': "
+                f"{analysis.get('core_disagreement')}. "
+                f"A similar historical precedent exists in PR #{p['id']} ({p['year']}): '{p['title']}'."
             )
-            rec_action = f"Flagged for human maintainer decision. Precedent #{p['id']} was resolved by keeping JSON with a compatibility shim. Suggest discussing a similar shim compromise."
+            rec_action = f"Flagged for human maintainer decision. Precedent #{p['id']} was {p['resolution']} Suggest reviewing how that case was closed and applying the same approach."
         else:
             summary = f"Discussion on PR #{pr.get('number')} has high comment volume. Core issue: {analysis.get('core_disagreement')}."
             rec_action = "No direct precedent found. Flagged for review due to contention indicators."

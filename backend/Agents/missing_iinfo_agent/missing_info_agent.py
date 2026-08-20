@@ -104,10 +104,10 @@ def classify_issue(state: AgentState) -> AgentState:
     model_key = os.getenv("NVIDIA_API_KEY")
     if model_key:
         client = ChatNVIDIA(
-            model=os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-nano-30b-a3b"),
+            model=os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"),
             api_key=model_key,
             temperature=0,
-            max_tokens=256,
+            max_completion_tokens=256,
         ).with_structured_output(IssueAssessment)
         prompt = ChatPromptTemplate.from_messages(
             [
