@@ -39,6 +39,15 @@ function needsDuplicateEvidence(result) {
   );
 }
 
+function isConfirmedDuplicate(result) {
+  const topMatch = result?.matches?.[0];
+  return Boolean(
+    result?.is_direct_duplicate === true ||
+    result?.suggested_action === "link_open_issue" ||
+    topMatch?.classification === "direct_duplicate"
+  );
+}
+
 async function getPersistedAnalysis(owner, repo, number) {
   try {
     const { Issue } = require("../models");
@@ -135,7 +144,7 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     const stepResult = await runStep(stepDefinition);
     if (!stepResult) continue;
     const { name, result } = stepResult;
-    if (name === "duplicate" && result.is_direct_duplicate) {
+    if (name === "duplicate" && isConfirmedDuplicate(result)) {
       const match = result.matches?.find((item) => item.classification === "direct_duplicate");
       const reporter = issue.user?.login ? `@${issue.user.login}` : "there";
       const evidence = (match?.evidence || []).map((e) => `- ${e}`).join("\n");
@@ -151,10 +160,17 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
         "",
         "Please follow the original issue for updates. If you believe this is not a duplicate, reopen the issue and explain what differs.",
       ].filter(Boolean).join("\n");
-      await githubIssueAction(owner, repo, issue.number, token, "COMMENT", { body: comment });
+      let commentError;
+      try {
+        await githubIssueAction(owner, repo, issue.number, token, "COMMENT", { body: comment });
+      } catch (error) {
+        commentError = error.message;
+        console.error(`Duplicate comment failed for ${owner}/${repo}#${issue.number}:`, error.message);
+      }
       await githubIssueAction(owner, repo, issue.number, token, "PATCH", { state: "closed", state_reason: "duplicate" });
       record.status = "stopped_duplicate";
       record.stopReason = "Duplicate detected; issue commented and closed.";
+      if (commentError) record.commentError = commentError;
       await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
       return;
     }
