@@ -109,7 +109,10 @@ def extract_signals(text: str) -> Dict[str, Any]:
 
 
 def build_searchable_text(issue: Dict[str, Any]) -> str:
-    return "\n".join(filter(None, [issue.get("title", ""), issue.get("body", "")]))
+    parts = [issue.get("title", ""), issue.get("body", "")]
+    for comment in issue.get("comments", []) or []:
+        parts.append(comment if isinstance(comment, str) else comment.get("body", ""))
+    return "\n".join(filter(None, parts))
 
 
 def likely_reporter_version(signals: Dict[str, Any], text: str) -> Optional[str]:
@@ -502,7 +505,7 @@ def _decide_heuristic(state: AgentState) -> Dict[str, Any]:
         recommendation = f"Direct duplicate of open issue #{top['issue_number']}. Link and consolidate discussion."
 
     return {
-        "is_direct_duplicate": True,
+        "is_direct_duplicate": top.get("classification") == "direct_duplicate",
         "duplicate_confidence": confidence,
         "matches": matches[:3],
         "suggested_action": action,
