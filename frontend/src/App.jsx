@@ -473,7 +473,10 @@ function TrendChart({
   const projLine =
     proj.length > 0
       ? `M${last[0].toFixed(1)},${last[1].toFixed(1)} ${proj
-          .map((v, i) => `L${xOf(safe.length + i).toFixed(1)},${yOf(v).toFixed(1)}`)
+          .map(
+            (v, i) =>
+              `L${xOf(safe.length + i).toFixed(1)},${yOf(v).toFixed(1)}`,
+          )
           .join(" ")}`
       : "";
   const marker =
@@ -484,7 +487,9 @@ function TrendChart({
     <div className="health-chart-card">
       <div className="health-chart-heading">
         <strong>{title}</strong>
-        <span>{format ? format(safe[safe.length - 1]) : safe[safe.length - 1]}</span>
+        <span>
+          {format ? format(safe[safe.length - 1]) : safe[safe.length - 1]}
+        </span>
       </div>
       <svg
         viewBox={`0 0 ${w} ${h}`}
@@ -551,7 +556,8 @@ function TrendChart({
 
 function HealthScoreGauge({ score, status }) {
   const s = Math.max(0, Math.min(100, Number(score) || 0));
-  const label = status || (s >= 80 ? "Healthy" : s >= 60 ? "Watch" : "Declining");
+  const label =
+    status || (s >= 80 ? "Healthy" : s >= 60 ? "Watch" : "Declining");
   const color =
     label === "Healthy" ? "#2f9e6e" : label === "Watch" ? "#e5a13c" : "#e5484d";
   const r = 34;
@@ -560,7 +566,14 @@ function HealthScoreGauge({ score, status }) {
     <div className="health-gauge">
       <div className="health-gauge-ring-wrap">
         <svg viewBox="0 0 96 96" className="health-gauge-ring">
-          <circle cx="48" cy="48" r={r} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="8" />
+          <circle
+            cx="48"
+            cy="48"
+            r={r}
+            fill="none"
+            stroke="rgba(255,255,255,0.1)"
+            strokeWidth="8"
+          />
           <circle
             cx="48"
             cy="48"
@@ -636,7 +649,10 @@ function BacklogFlowChart({ labels, opened, closed, backlog, color }) {
   const projLine =
     proj.length > 0
       ? `M${backlogPts[backlogPts.length - 1][0].toFixed(1)},${backlogPts[backlogPts.length - 1][1].toFixed(1)} ${proj
-          .map((v, i) => `L${xOf(safeOpen.length + i).toFixed(1)},${yOf(v).toFixed(1)}`)
+          .map(
+            (v, i) =>
+              `L${xOf(safeOpen.length + i).toFixed(1)},${yOf(v).toFixed(1)}`,
+          )
           .join(" ")}`
       : "";
   return (
@@ -645,24 +661,63 @@ function BacklogFlowChart({ labels, opened, closed, backlog, color }) {
         <strong>Backlog flow (opened vs. closed)</strong>
         <span>{safeBacklog[safeBacklog.length - 1]} open</span>
       </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="health-chart" role="img" aria-label="Backlog flow: opened vs closed per week with backlog forecast">
+      <svg
+        viewBox={`0 0 ${w} ${h}`}
+        className="health-chart"
+        role="img"
+        aria-label="Backlog flow: opened vs closed per week with backlog forecast"
+      >
         <path d={stackedArea} fill="#2f9e6e" opacity="0.22" />
-        <path d={stackedArea} fill="none" stroke="#2f9e6e" strokeWidth="1" opacity="0.5" />
-        <path d={backlogLine} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" />
+        <path
+          d={stackedArea}
+          fill="none"
+          stroke="#2f9e6e"
+          strokeWidth="1"
+          opacity="0.5"
+        />
+        <path
+          d={backlogLine}
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
         {projLine && (
-          <path d={projLine} fill="none" stroke={color} strokeWidth="1.6" strokeDasharray="3 3" opacity="0.7" />
+          <path
+            d={projLine}
+            fill="none"
+            stroke={color}
+            strokeWidth="1.6"
+            strokeDasharray="3 3"
+            opacity="0.7"
+          />
         )}
         {backlogPts.map(([x, y], i) => (
-          <circle key={i} cx={x.toFixed(1)} cy={y.toFixed(1)} r="2" fill={color}>
+          <circle
+            key={i}
+            cx={x.toFixed(1)}
+            cy={y.toFixed(1)}
+            r="2"
+            fill={color}
+          >
             <title>{`${labels[i]}: backlog ${safeBacklog[i]}`}</title>
           </circle>
         ))}
       </svg>
       <div className="health-chart-legend">
-        <span><i style={{ background: color }} /> backlog size</span>
-        <span><i style={{ background: "#2f9e6e" }} /> opened</span>
-        <span><i style={{ background: "#3b82f6" }} /> closed</span>
-        <span><i style={{ background: "transparent", border: "1px dashed #fff" }} /> forecast</span>
+        <span>
+          <i style={{ background: color }} /> backlog size
+        </span>
+        <span>
+          <i style={{ background: "#2f9e6e" }} /> opened
+        </span>
+        <span>
+          <i style={{ background: "#3b82f6" }} /> closed
+        </span>
+        <span>
+          <i style={{ background: "transparent", border: "1px dashed #fff" }} />{" "}
+          forecast
+        </span>
       </div>
       <div className="health-chart-labels">
         <span>{labels[0]}</span>
@@ -679,7 +734,9 @@ function HealthTrendDetail({ result }) {
   const has = (key) => Array.isArray(series[key]) && series[key].length > 1;
   const last = (key) => {
     const values = series[key];
-    return Array.isArray(values) && values.length ? values[values.length - 1] : 0;
+    return Array.isArray(values) && values.length
+      ? values[values.length - 1]
+      : 0;
   };
   const responseTrend = (result.trends || []).find(
     (t) => t.metric === "time_to_first_response_days",
@@ -690,17 +747,32 @@ function HealthTrendDetail({ result }) {
   const prLatency = series.pr_merge_latency_days || [];
   const showPr = has("pr_merge_latency_days") && prLatency.some((v) => v > 0);
   const kpis = [
-    { label: "Response time (latest)", value: `${last("time_to_first_response_days")} days` },
+    {
+      label: "Response time (latest)",
+      value: `${last("time_to_first_response_days")} days`,
+    },
     { label: "Open backlog", value: `${Math.round(last("backlog_size"))}` },
-    { label: "Opened / closed last week", value: `${Math.round(last("incoming_volume"))} / ${Math.round(last("issues_closed"))}` },
+    {
+      label: "Opened / closed last week",
+      value: `${Math.round(last("incoming_volume"))} / ${Math.round(last("issues_closed"))}`,
+    },
     { label: "Duplicate rate", value: `${last("duplicate_rate")}%` },
-    { label: "Contributors (new last week)", value: `${Math.round(last("active_contributors"))} (${Math.round(last("new_contributors"))})` },
-    { label: "PR merge latency", value: showPr ? `${last("pr_merge_latency_days")} days` : "—" },
+    {
+      label: "Contributors (new last week)",
+      value: `${Math.round(last("active_contributors"))} (${Math.round(last("new_contributors"))})`,
+    },
+    {
+      label: "PR merge latency",
+      value: showPr ? `${last("pr_merge_latency_days")} days` : "—",
+    },
   ];
   return (
     <div className="health-trend-detail">
       <div className="health-overview">
-        <HealthScoreGauge score={result.health_score} status={result.health_status} />
+        <HealthScoreGauge
+          score={result.health_score}
+          status={result.health_status}
+        />
         <div className="health-kpis">
           {kpis.map((kpi) => (
             <div className="health-kpi" key={kpi.label}>
@@ -735,7 +807,9 @@ function HealthTrendDetail({ result }) {
               {result.trends.map((trend) => (
                 <span className="health-trend-chip" key={trend.metric}>
                   {trend.display}: {trend.baseline_value} → {trend.recent_value}
-                  {trend.change_week ? ` (inflection ${trend.change_week})` : ""}
+                  {trend.change_week
+                    ? ` (inflection ${trend.change_week})`
+                    : ""}
                 </span>
               ))}
             </div>
@@ -884,9 +958,7 @@ function renderInline(text) {
     if (token.startsWith("**") && token.endsWith("**") && token.length > 4)
       return <strong key={i}>{token.slice(2, -2)}</strong>;
     if (token.startsWith("`") && token.endsWith("`") && token.length > 2)
-      return (
-        <code key={i}>{token.slice(1, -1)}</code>
-      );
+      return <code key={i}>{token.slice(1, -1)}</code>;
     const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
     if (link)
       return (
@@ -995,13 +1067,12 @@ function AgentCardSummary({ agent }) {
           ))}
         </ul>
       )}
-      {agent.key === "backlog" &&
-        Array.isArray(result.analysis_results) && (
-          <p className="card-note">
-            {result.analysis_results.length} issues analyzed — open the agent
-            detail for recommended actions.
-          </p>
-        )}
+      {agent.key === "backlog" && Array.isArray(result.analysis_results) && (
+        <p className="card-note">
+          {result.analysis_results.length} issues analyzed — open the agent
+          detail for recommended actions.
+        </p>
+      )}
     </div>
   );
 }
@@ -1567,7 +1638,9 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
                 <p className="eyebrow">Missing information</p>
                 <h3>Waiting for reporter details</h3>
                 <Markdown
-                  text={missing.draft_comment || missing.missing_details?.join(", ")}
+                  text={
+                    missing.draft_comment || missing.missing_details?.join(", ")
+                  }
                 />
               </section>
             )}
@@ -1957,6 +2030,11 @@ function RepositoryTabDashboard({
     (issue) =>
       !issue.pull_request && escalationDecisions[issue.number]?.needsAttention,
   );
+  const highPriorityIssues = [...escalationIssues].sort(
+    (first, second) =>
+      Number(escalationDecisions[second.number]?.aggregateConfidence || 0) -
+      Number(escalationDecisions[first.number]?.aggregateConfidence || 0),
+  );
   const content = {
     Issues: (
       <div className="panel">
@@ -1988,23 +2066,40 @@ function RepositoryTabDashboard({
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Maintainer queue</p>
-            <h2>Escalations</h2>
+            <p className="eyebrow">High priority</p>
+            <h2>Needs Your Attention</h2>
           </div>
-          <span className="count-label">
-            {escalationIssues.length} need attention
-          </span>
+          <span className="count-label">{highPriorityIssues.length}</span>
         </div>
-        {escalationIssues.map((issue) => (
-          <IssueRow
-            item={issue}
-            workflowStatus={workflowStatuses[issue.number]}
-            onClick={setSelectedIssue}
-            key={issue.id}
-          />
-        ))}
-        {!escalationIssues.length && (
-          <EmptyState>No active escalations.</EmptyState>
+        {highPriorityIssues.length ? (
+          <div className="high-priority-list">
+            {highPriorityIssues.map((issue) => {
+              const decision = escalationDecisions[issue.number];
+              const categories = (decision.triggeringCategories || [])
+                .map((category) => category.replaceAll("_", " "))
+                .join(", ");
+              return (
+                <div className="high-priority-item" key={issue.id}>
+                  <IssueRow
+                    item={issue}
+                    workflowStatus={workflowStatuses[issue.number]}
+                    onClick={setSelectedIssue}
+                  />
+                  <div className="high-priority-meta">
+                    <span>Flagged by: {categories || "escalation"}</span>
+                    <strong>
+                      {Math.round(
+                        Number(decision.aggregateConfidence || 0) * 100,
+                      )}
+                      % confidence
+                    </strong>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <EmptyState>Nothing needs attention right now.</EmptyState>
         )}
       </div>
     ),
