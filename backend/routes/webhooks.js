@@ -154,9 +154,14 @@ function validSignature(req) {
   return signature.length === expected.length && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
-router.post("/github", async (req, res) => {
+router.post(["/github", "/"], async (req, res) => {
   const event = req.get("x-github-event") || "unknown";
-  lastWebhook = { event, action: req.body?.action || "unknown", receivedAt: new Date().toISOString() };
+  lastWebhook = {
+    event,
+    action: req.body?.action || "unknown",
+    delivery: req.get("x-github-delivery") || null,
+    receivedAt: new Date().toISOString(),
+  };
   if (!validSignature(req)) {
     lastWebhook.rejected = "invalid_signature_or_missing_secret";
     console.error("GitHub webhook rejected: invalid signature or missing GITHUB_WEBHOOK_SECRET");
@@ -193,7 +198,7 @@ router.post("/github", async (req, res) => {
 
 router.get("/status", (req, res) => {
   res.json({
-    webhookEndpoint: "/api/webhooks/github",
+    webhookEndpoints: ["/api/webhooks/github", "/api/webhooks"],
     configured: {
       webhookSecret: Boolean(process.env.GITHUB_WEBHOOK_SECRET),
       agentToken: Boolean(process.env.GITHUB_TOKEN),
