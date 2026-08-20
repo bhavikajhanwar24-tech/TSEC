@@ -2,6 +2,20 @@ const { AgentRun, EscalationDecision, Issue } = require("../../models");
 const { notifyMaintainersOfEscalation } = require("../../services/notificationService");
 const { normalizeCategory, scoreRuns } = require("./scoringRules");
 
+async function repoThreshold(repoFullName) {
+  if (!repoFullName) return 0.6;
+  try {
+    const { Feedback } = require("../../models");
+    const feedback = await Feedback.findAll({ where: { repoFullName }, attributes: ["verdict"] });
+    const reviewed = feedback.filter((item) => item.verdict);
+    const corrected = reviewed.filter((item) => item.verdict === "corrected").length;
+    return reviewed.length >= 3 && corrected / reviewed.length >= 0.25 ? 0.75 : 0.6;
+  } catch (error) {
+    console.error("Repo calibration lookup failed:", error.message);
+    return 0.6;
+  }
+}
+
 const REQUIRED_CATEGORIES = new Set([
   "duplicate",
   "missing_information",
@@ -30,6 +44,10 @@ async function persistDecision(issueId, decision, notificationSent) {
     isDuplicateHotspot: decision.isDuplicateHotspot,
     duplicateHotspotCount: decision.duplicateHotspotCount,
     urgencyReasons: decision.urgencyReasons,
+    triggeringEvent: decision.triggeringEvent,
+    retrievedEvidence: decision.retrievedEvidence,
+    reasoningTrace: decision.reasoningTrace,
+    finalAction: decision.finalAction,
     notificationSent,
   };
   const [record] = await EscalationDecision.findOrCreate({ where: { issueId }, defaults: values });
@@ -76,7 +94,12 @@ async function evaluateIssueForEscalation(issueId) {
     return run.issue?.state === "open" && (output.is_direct_duplicate || output.suggested_action === "link_open_issue");
   }).length;
   const isDuplicateHotspot = duplicateHotspotCount >= 3;
-  const decision = scoreRuns(completedRuns.length ? completedRuns : agentRuns, { duplicateHotspotCount, isDuplicateHotspot });
+  const threshold = await repoThreshold(issue?.repoFullName);
+  const decision = scoreRuns(completedRuns.length ? completedRuns : agentRuns, { duplicateHotspotCount, isDuplicateHotspot, threshold });
+  decision.triggeringEvent = { type: "github_issue_workflow", sourceId: issue.githubIssueId, timestamp: new Date().toISOString(), repoFullName: issue.repoFullName };
+  decision.retrievedEvidence = agentRuns.flatMap((run) => Array.isArray(run.citedEvidence) ? run.citedEvidence : []);
+  decision.reasoningTrace = agentRuns.flatMap((run) => Array.isArray(run.reasoningTrace) ? run.reasoningTrace : [run.reasoning]).filter(Boolean);
+  decision.finalAction = decision.needsAttention ? "escalate" : "no_action";
   const existing = await EscalationDecision.findOne({ where: { issueId } });
   if (existing) return { pending: false, ...existing.toJSON() };
   const notificationSent = issue ? await notifyForDecision(issue, agentRuns, decision) : false;
@@ -84,4 +107,4 @@ async function evaluateIssueForEscalation(issueId) {
   return { ...decision, notificationSent, pending: false, id: record.id };
 }
 
-module.exports = { REQUIRED_CATEGORIES, evaluateIssueForEscalation, pendingDecision, persistDecision };
+module.exports = { REQUIRED_CATEGORIES, evaluateIssueForEscalation, pendingDecision, persistDecision, repoThreshold };

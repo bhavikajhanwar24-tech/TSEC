@@ -1877,6 +1877,7 @@ function CentralAnalysisDashboard({
   escalation,
   moderator,
   onModeratorAction,
+  onFeedback,
   onClose,
 }) {
   const [activeAgent, setActiveAgent] = useState("sensitivity");
@@ -2110,6 +2111,7 @@ function CentralAnalysisDashboard({
                       {escalation.isDuplicateHotspot && <span className="hotspot-badge">Duplicate hotspot</span>}
                     </div>
                     <p>{(escalation.urgencyReasons || []).join(" · ") || "Urgency is based on completed agent signals."}</p>
+                    {Number(escalation.threshold || 0.6) > 0.6 && <p className="calibration-notice">Repo calibration raised the auto-action threshold to {Math.round(Number(escalation.threshold) * 100)}% after maintainer corrections.</p>}
                     <div className="escalation-thread">
                       <strong>Issue and user discussion</strong>
                       <p>{escalation.issue?.body || issue.body || "No issue description."}</p>
@@ -2119,7 +2121,7 @@ function CentralAnalysisDashboard({
                     </div>
                     <details className="escalation-agent-details">
                       <summary>Agent reasons and evidence</summary>
-                      {(escalation.agentRuns || []).map((run) => <div key={run.id}><b>{run.agentName}</b> · {run.status}<p>{run.reasoning}</p><pre>{JSON.stringify(run.output || {}, null, 2)}</pre></div>)}
+                      {(escalation.agentRuns || []).map((run) => <DecisionRecord key={run.id} run={run} onFeedback={onFeedback} />)}
                     </details>
                     <ModeratorPanel context={moderator} onAction={onModeratorAction} />
                   </section>
@@ -2196,6 +2198,41 @@ function CentralAnalysisDashboard({
       </div>
     </div>
   );
+}
+
+function DecisionRecord({ run, onFeedback }) {
+  const [correcting, setCorrecting] = useState(false);
+  const [correctionType, setCorrectionType] = useState("evidence_weighting");
+  const [correctionDetail, setCorrectionDetail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const savedFeedback = run.feedbacks?.[run.feedbacks.length - 1];
+  async function submit(verdict) {
+    if (verdict === "corrected" && !correctionDetail.trim()) return;
+    setBusy(true);
+    try {
+      await onFeedback({ agentRunId: run.id, verdict, correctionType, correctionDetail });
+      setCorrecting(false);
+      setCorrectionDetail("");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const evidence = Array.isArray(run.citedEvidence) ? run.citedEvidence : [];
+  return <article className={`decision-record ${savedFeedback?.verdict || ""}`}>
+    <div className="decision-record-heading">
+      <div><b>{run.agentName}</b><span>{run.finalAction || run.suggestedAction || "no action"} · {Math.round(Number(run.confidence || 0) * 100)}% confidence</span></div>
+      <span className="decision-status">{savedFeedback?.verdict || run.status}</span>
+    </div>
+    <p>{run.reasoning}</p>
+    {Array.isArray(run.reasoningTrace) && run.reasoningTrace.length > 0 && <ol className="reasoning-steps">{run.reasoningTrace.map((step, index) => <li key={`${run.id}-step-${index}`}>{String(step)}</li>)}</ol>}
+    {evidence.length > 0 && <div className="decision-evidence">{evidence.map((item, index) => {
+      const url = item.url || item.html_url;
+      const label = item.source || item.title || item.issue_number ? `${item.source || "Issue"}${item.issue_number ? ` #${item.issue_number}` : ""}` : String(item);
+      return url ? <a href={url} target="_blank" rel="noreferrer" key={`${run.id}-evidence-${index}`}>{label} →</a> : <span key={`${run.id}-evidence-${index}`}>{label}</span>;
+    })}</div>}
+    {!savedFeedback && <div className="decision-feedback-actions"><button type="button" className="primary-button" disabled={busy} onClick={() => submit("approved")}>Approve</button><button type="button" className="outline-button" disabled={busy} onClick={() => setCorrecting(true)}>Correct</button></div>}
+    {correcting && <div className="correction-form"><select value={correctionType} onChange={(event) => setCorrectionType(event.target.value)}><option value="evidence_weighting">Wrong evidence weighting</option><option value="threshold">Wrong threshold/action</option><option value="category">Wrong category</option></select><textarea value={correctionDetail} onChange={(event) => setCorrectionDetail(event.target.value)} placeholder="What should the agent have understood?" rows="3" /><button type="button" className="primary-button" disabled={busy || !correctionDetail.trim()} onClick={() => submit("corrected")}>Save correction</button></div>}
+  </article>;
 }
 
 function ModeratorPanel({ context, onAction }) {
@@ -2378,6 +2415,11 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
         onModeratorAction={async (payload) => {
           const result = await api(`/api/issues/${owner}/${repo}/moderation/${issue.number}`, { method: "POST", body: payload });
           setModerator((current) => current ? { ...current, issue: result.issue } : current);
+        }}
+        onFeedback={async (payload) => {
+          await api(`/api/issues/${escalation?.issue?.id || issue.id}/feedback`, { method: "POST", body: payload });
+          const updated = await api(`/api/issues/${escalation?.issue?.id || issue.id}/escalation`);
+          setEscalation(updated);
         }}
         onClose={onClose}
       />

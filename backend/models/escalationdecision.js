@@ -44,6 +44,10 @@ module.exports = (sequelize, DataTypes) => {
     isDuplicateHotspot: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     duplicateHotspotCount: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     urgencyReasons: { type: DataTypes.JSON, allowNull: false, defaultValue: [] },
+    triggeringEvent: { type: DataTypes.JSON, allowNull: true },
+    retrievedEvidence: { type: DataTypes.JSON, allowNull: true },
+    reasoningTrace: { type: DataTypes.JSON, allowNull: true },
+    finalAction: { type: DataTypes.STRING, allowNull: true },
   });
 
   EscalationDecision.associate = (models) => {

@@ -25,6 +25,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    repoFullName: { type: DataTypes.STRING, allowNull: true },
+    verdict: { type: DataTypes.ENUM("approved", "corrected"), allowNull: true },
+    correctionType: { type: DataTypes.STRING, allowNull: true },
+    correctionDetail: { type: DataTypes.TEXT, allowNull: true },
   });
 
   Feedback.associate = (models) => {

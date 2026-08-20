@@ -52,8 +52,8 @@ function indexDocuments(owner, repo, items) {
  * (titles, authors, files changed) — full bodies/diffs only when
  * `tier: "full"` is requested. since/until are epoch-seconds windows so
  * "last 30 days" never loads all history. */
-function searchDocuments(owner, repo, question, limit = 8, options = {}) {
-  return runBridge({
+async function searchDocuments(owner, repo, question, limit = 8, options = {}) {
+  const result = await runBridge({
     operation: "query",
     owner,
     repo,
@@ -66,6 +66,21 @@ function searchDocuments(owner, repo, question, limit = 8, options = {}) {
     console.error("RAG retrieval failed:", error.message);
     return { hits: [], error: error.message };
   });
+  try {
+    const { Feedback } = require("../models");
+    const corrections = await Feedback.findAll({ where: { repoFullName: `${owner}/${repo}`, verdict: "corrected", correctionType: "evidence_weighting" }, attributes: ["correctionDetail"] });
+    const correctionTokens = corrections.flatMap((item) => String(item.correctionDetail || "").toLowerCase().match(/[a-z0-9_-]{4,}/g) || []);
+    if (correctionTokens.length) {
+      result.hits = (result.hits || []).map((hit) => {
+        const text = String(hit.text || "").toLowerCase();
+        const overlap = correctionTokens.filter((token) => text.includes(token)).length;
+        return { ...hit, score: Number(hit.score || 0) - Math.min(0.25, overlap * 0.05) };
+      }).sort((left, right) => Number(right.score || 0) - Number(left.score || 0));
+    }
+  } catch (error) {
+    console.error("Repo retrieval calibration failed:", error.message);
+  }
+  return result;
 }
 
 module.exports = { indexDocuments, searchDocuments };

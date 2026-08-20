@@ -239,10 +239,25 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .escalation-evidence-heading { align-items: flex-start; display: flex; justify-content: space-between; }
 .escalation-evidence-heading h2 { font-size: 24px; margin: 0; }
 .escalation-evidence-card > p { color: var(--muted); font-size: 13px; }
+.escalation-evidence-card > p.calibration-notice { color: var(--warning); font-weight: 700; }
 .hotspot-badge { background: #fff0e8; border-radius: 12px; color: #c24f20; display: inline-block; font-size: 10px; padding: 5px 8px; white-space: nowrap; }
 .escalation-thread { background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font-size: 12px; line-height: 1.55; margin-top: 12px; padding: 13px; }
 .escalation-thread > p { white-space: pre-wrap; }
 .escalation-thread div { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; white-space: pre-wrap; }
+.decision-record { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 14px; }
+.decision-record:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+.decision-record-heading { align-items: flex-start; display: flex; gap: 12px; justify-content: space-between; }
+.decision-record-heading div { display: flex; flex-direction: column; gap: 3px; }
+.decision-record-heading span { color: var(--muted); font-size: 11px; }
+.decision-status { background: var(--surface-soft); border-radius: 10px; color: var(--muted); font-size: 10px !important; padding: 4px 7px; }
+.decision-record p { margin-bottom: 8px !important; white-space: pre-wrap; }
+.reasoning-steps { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 8px 0; padding-left: 20px; }
+.decision-evidence { display: flex; flex-wrap: wrap; gap: 7px; margin: 9px 0; }
+.decision-evidence a, .decision-evidence span { background: var(--accent-soft); border-radius: 10px; color: var(--accent); font-size: 11px; padding: 5px 8px; text-decoration: none; }
+.decision-feedback-actions, .correction-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.correction-form { align-items: stretch; flex-direction: column; }
+.correction-form select, .correction-form textarea { background: var(--surface); border: 1px solid var(--line); border-radius: 7px; color: var(--ink); font: inherit; padding: 8px; }
+.correction-form textarea { resize: vertical; }
 .escalation-agent-details { margin-top: 12px; }
 .escalation-agent-details summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 700; }
 .escalation-agent-details > div { border-top: 1px solid var(--line); margin-top: 9px; padding-top: 9px; }

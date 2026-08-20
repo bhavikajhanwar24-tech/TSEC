@@ -47,6 +47,7 @@ function healthInflection(run) {
 }
 
 function scoreRuns(agentRuns, hotspot = {}) {
+  const threshold = Number(hotspot.threshold || SCORE_THRESHOLD);
   const breakdown = {};
   const triggeringCategories = [];
   let securityShortCircuit = false;
@@ -99,7 +100,7 @@ function scoreRuns(agentRuns, hotspot = {}) {
   if (duplicateFailed) { urgency += 25; urgencyReasons.push("duplicate detection failed"); }
   urgency = Math.max(0, Math.min(100, urgency));
   return {
-    needsAttention: securityShortCircuit || aggregateConfidence >= SCORE_THRESHOLD || hotspot.isDuplicateHotspot || duplicateFailed,
+    needsAttention: securityShortCircuit || aggregateConfidence >= threshold || hotspot.isDuplicateHotspot || duplicateFailed,
     triggeringCategories: [...new Set(triggeringCategories)],
     aggregateConfidence,
     perCategoryBreakdown: breakdown,
@@ -107,6 +108,7 @@ function scoreRuns(agentRuns, hotspot = {}) {
     isDuplicateHotspot: Boolean(hotspot.isDuplicateHotspot),
     duplicateHotspotCount: hotspot.duplicateHotspotCount || 0,
     urgencyReasons,
+    threshold,
   };
 }
 

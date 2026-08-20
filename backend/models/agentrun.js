@@ -33,6 +33,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.JSON,
       allowNull: true,
     },
+    triggeringEvent: { type: DataTypes.JSON, allowNull: true },
+    toolCalls: { type: DataTypes.JSON, allowNull: true },
+    reasoningTrace: { type: DataTypes.JSON, allowNull: true },
+    finalAction: { type: DataTypes.STRING, allowNull: true },
     suggestedAction: {
       type: DataTypes.TEXT,
       allowNull: true,

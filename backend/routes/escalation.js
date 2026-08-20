@@ -98,7 +98,7 @@ router.get("/:issueId/escalation", async (req, res) => {
   if (!req.session?.githubToken) return res.status(401).json({ error: "Not authenticated" });
   try {
     const { Issue } = require("../models");
-    const issueInclude = [{ association: "agentRuns" }, { association: "timelines" }];
+    const issueInclude = [{ association: "agentRuns", include: [{ association: "feedbacks" }] }, { association: "timelines" }];
     const issue = isUuid(req.params.issueId)
       ? await Issue.findOne({ where: { id: req.params.issueId }, include: issueInclude })
       : await Issue.findOne({ where: { githubIssueId: String(req.params.issueId) }, include: issueInclude });
@@ -112,6 +112,35 @@ router.get("/:issueId/escalation", async (req, res) => {
   } catch (error) {
     console.error("Escalation decision lookup failed:", error.message);
     return res.status(500).json({ error: "Could not load escalation decision" });
+  }
+});
+
+router.post("/:issueId/feedback", async (req, res) => {
+  if (!req.session?.githubToken) return res.status(401).json({ error: "Not authenticated" });
+  const { AgentRun, Feedback, Issue } = require("../models");
+  const verdict = String(req.body?.verdict || "");
+  const correctionType = String(req.body?.correctionType || "");
+  const correctionDetail = String(req.body?.correctionDetail || "").trim();
+  if (!["approved", "corrected"].includes(verdict)) return res.status(400).json({ error: "verdict must be approved or corrected" });
+  if (verdict === "corrected" && (!correctionType || !correctionDetail)) return res.status(400).json({ error: "Corrections require a type and detail" });
+  try {
+    const run = await AgentRun.findByPk(req.body?.agentRunId, { include: [{ association: "issue" }] });
+    if (!run || String(run.issueId) !== String(req.issueId)) return res.status(404).json({ error: "Decision not found" });
+    const issue = run.issue || await Issue.findByPk(req.issueId);
+    const feedback = await Feedback.create({
+      agentRunId: run.id,
+      userGithubId: req.session.githubUser?.login || req.session.githubUserId || "maintainer",
+      rating: verdict === "approved" ? "helpful" : "not_helpful",
+      comment: correctionDetail || null,
+      repoFullName: issue?.repoFullName || null,
+      verdict,
+      correctionType: correctionType || null,
+      correctionDetail: correctionDetail || null,
+    });
+    return res.status(201).json({ feedback, repoFullName: issue?.repoFullName || null });
+  } catch (error) {
+    console.error("Decision feedback write failed:", error.message);
+    return res.status(500).json({ error: "Could not store decision feedback" });
   }
 });
 
