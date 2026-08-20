@@ -167,19 +167,23 @@ def github_request(path: str, token: str) -> Any:
     return response.json()
 
 
-def fetch_human_comments(owner: str, repo: str, issue_number: int, token: str) -> List[Dict[str, Any]]:
-    """Return reporter comments while excluding RepoGuardian's own bot comments."""
+def fetch_issue_comments(owner: str, repo: str, issue_number: int, token: str) -> List[Dict[str, Any]]:
+    """Return the complete discussion so answers and previous requests are visible."""
     try:
-        comments = github_request(
+        return github_request(
             f"/repos/{owner}/{repo}/issues/{issue_number}/comments?per_page=100",
             token,
         )
     except requests.HTTPError:
         return []
-    return [
-        comment for comment in comments
-        if comment.get("user", {}).get("type") not in {"Bot", "Integration"}
-    ]
+
+
+def _comment_context(comments: List[Dict[str, Any]]) -> str:
+    return "\n\n".join(
+        f"[{('AUTOMATION' if comment.get('user', {}).get('type') in {'Bot', 'Integration'} else 'REPORTER')}] "
+        f"{comment.get('user', {}).get('login', 'unknown')}:\n{comment.get('body') or ''}"
+        for comment in comments
+    )
 
 
 def fetch_issue(state: AgentState) -> AgentState:
@@ -191,14 +195,11 @@ def fetch_issue(state: AgentState) -> AgentState:
     if "pull_request" in issue:
         return {"issue": issue, "action": "pass-through", "issue_type": "other"}
 
-    comments = fetch_human_comments(
+    comments = fetch_issue_comments(
         state["owner"], state["repo"], state["issue_number"], token
     )
     if comments:
-        discussion = "\n\n".join(
-            f"Comment by {comment.get('user', {}).get('login', 'reporter')}:\n{comment.get('body') or ''}"
-            for comment in comments
-        )
+        discussion = _comment_context(comments)
         issue = {**issue, "body": f"{issue.get('body') or ''}\n\nGitHub discussion:\n{discussion}"}
 
     guidance_parts = []
@@ -307,7 +308,7 @@ def _analyze_with_llm(state: AgentState, defaults: List[str]) -> Optional[Dict[s
         issue = state["issue"]
         title = issue.get("title", "")
         body = issue.get("body") or ""
-        text = f"# {title}\n\n{body}"
+        text = f"# {title}\n\n{body}"[:12000]
         guidance = (state.get("guidance") or "")[:2000]
         client = ChatNVIDIA(
             model=os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"),
@@ -324,11 +325,13 @@ def _analyze_with_llm(state: AgentState, defaults: List[str]) -> Optional[Dict[s
                     "- required_fields: keys the report should contain for its type "
                     "(bug: os, version, reproduction_steps, expected_actual, plus logs/error_message if relevant; "
                     "feature: use_case, expected_behavior; question/other: context).\n"
-                    "- present_fields: required keys that ARE actually covered in the issue text.\n"
-                    "- missing_details: short concrete phrases for what is genuinely absent from the "
-                    "ACTUAL issue text, e.g. 'OS version not mentioned', 'No reproduction steps', "
-                    "'Error logs not attached'. Base everything strictly on the provided issue text and "
-                    "template. Never ask for something the reporter already provided.\n"
+                    "- present_fields: required keys that ARE actually covered by the original issue OR "
+                    "a [REPORTER] comment. Treat a reporter's plain-language answer as valid even if it "
+                    "does not use the requested heading.\n"
+                    "- missing_details: short concrete phrases for what is genuinely absent after reading "
+                    "the entire discussion. Never request a field already answered by a [REPORTER] comment. "
+                    "[AUTOMATION] comments are previous questions, not evidence that a field is missing. "
+                    "Return an empty missing_details list when the report is actionable.\n"
                     "Reply with JSON only.",
                 ),
                 (
@@ -351,7 +354,9 @@ def _analyze_with_llm(state: AgentState, defaults: List[str]) -> Optional[Dict[s
         allowed = set(ALLOWED_FIELD_KEYS)
         required = [f for f in assessment.required_fields if f in allowed] or defaults
         present = [f for f in assessment.present_fields if f in allowed and f in required]
-        details = [d.strip() for d in assessment.missing_details if d and d.strip()]
+        details = list(dict.fromkeys(d.strip() for d in assessment.missing_details if d and d.strip()))
+        missing_keys = set(required) - set(present)
+        details = details[:len(missing_keys)]
         return {"required_fields": required, "present_fields": present, "missing_details": details}
     except Exception:
         return None
@@ -372,7 +377,7 @@ def find_required_fields(state: AgentState) -> AgentState:
             requested = [field for field in required if re.search(patterns[field], guidance)]
             if requested:
                 required = requested
-        present = [field for field in required if re.search(FIELD_MARKERS[field], body)]
+        present = [field for field in required if _field_is_present(field, body)]
         missing_details = [
             _detail_for(field) for field in required if field not in present
         ]
@@ -387,6 +392,24 @@ def find_required_fields(state: AgentState) -> AgentState:
         "missing_fields": [field for field in required if field not in present],
         "missing_details": missing_details,
     }
+
+
+def _field_is_present(field: str, body: str) -> bool:
+    """Recognize common natural-language answers when the LLM is unavailable."""
+    if re.search(FIELD_MARKERS[field], body):
+        return True
+    patterns = {
+        "os": r"\b(?:windows\s*\d*|mac(?:os)?|linux|ubuntu|debian|android|ios|iphone|ipad)\b",
+        "version": r"\b(?:v?\d+\.\d+(?:\.\d+)?|version\s*[:#]?\s*\S+)\b",
+        "reproduction_steps": r"\b(?:step\s*\d+|first,|then,|reproduce|reproduc|steps? to)\b",
+        "expected_actual": r"\b(?:expected|expect|actual|instead|but got|should have)\b",
+        "use_case": r"\b(?:use case|because|so that|would help|motivat)\b",
+        "expected_behavior": r"\b(?:should|would like|desired|acceptance|expected behavior)\b",
+        "context": r"\b(?:context|background|trying to|using this|environment)\b",
+        "logs": r"```[\s\S]+```|\b(?:log|stack trace|traceback|console output)\b",
+        "error_message": r"\b(?:error|exception|failure|failed)\b",
+    }
+    return bool(re.search(patterns.get(field, r"$^"), body, re.IGNORECASE))
 
 
 def _detail_for(field: str) -> str:
@@ -405,15 +428,24 @@ def _detail_for(field: str) -> str:
 
 
 def _draft_comment(issue_type: str, missing: List[str]) -> str:
-    points = [f"- {FIELD_REQUEST[field]}" for field in missing if field in FIELD_REQUEST]
+    questions = {
+        "os": "What operating system and version are you using?",
+        "version": "What app, package, or project version is affected?",
+        "reproduction_steps": "What exact steps reproduce the problem?",
+        "expected_actual": "What did you expect to happen, and what happened instead?",
+        "use_case": "What use case or problem would this feature solve?",
+        "expected_behavior": "What behavior or outcome should the feature provide?",
+        "context": "What additional context would help us understand the situation?",
+    }
+    points = [f"{index}. {questions[field]}" for index, field in enumerate(missing, 1) if field in questions]
     if not points:
         return ""
     if issue_type == "bug":
-        intro = "Thanks for reporting this! To help us reproduce and fix it, could you share the following details?"
+        intro = "Thanks for the report. I can continue once you provide the following details:"
     elif issue_type == "feature":
-        intro = "Thanks for the suggestion! To help us evaluate it, could you share the following details?"
+        intro = "Thanks for the suggestion. To evaluate it, please provide the following details:"
     else:
-        intro = "Thanks for reaching out! To help you, could you add the following details?"
+        intro = "Thanks for the context. Please provide the following details so we can continue:"
     return intro + "\n\n" + "\n".join(points)
 
 
@@ -435,23 +467,31 @@ def _draft_with_llm(state: AgentState, missing_details: List[str]) -> Optional[s
             [
                 (
                     "system",
-                    "Write a short, polite GitHub comment requesting the missing information "
-                    "listed below. Only ask for the listed items. Reference the reporter's own "
-                    "details naturally (e.g. acknowledge what they did provide). 2-4 sentences, "
-                    "no markdown headers, no generic filler, no extra requests.",
+                    "Write one helpful GitHub comment for the reporter. Ask only for the missing "
+                    "items listed below. Read the full discussion first: do not repeat a question "
+                    "if the reporter already answered it. Briefly acknowledge useful information "
+                    "they provided, then ask the remaining questions in plain language. "
+                    "Use a short numbered list when there is more than one item. Do not mention "
+                    "the model, analysis, internal fields, or automation. Do not ask for logs, "
+                    "versions, or other details unless they appear in the missing list. "
+                    "Return only the comment text, with no quotation marks or heading.",
                 ),
-                ("human", "Issue title: {title}\nIssue body:\n{body}\n\nMissing details:\n{missing}"),
+                (
+                    "human",
+                    "Issue title: {title}\n\nFull issue and discussion:\n{body}\n\n"
+                    "Confirmed missing items (the only things you may ask for):\n{missing}",
+                ),
             ]
         )
         reply = (prompt | client).invoke(
             {
                 "title": issue.get("title", ""),
-                "body": (issue.get("body") or "")[:1500],
-                "missing": "\n".join(f"- {d}" for d in missing_details),
+                "body": (issue.get("body") or "")[:12000],
+                "missing": "\n".join(f"- {d}" for d in dict.fromkeys(missing_details)),
             }
         )
-        text = (reply.content or "").strip()
-        return text or None
+        text = (reply.content or "").strip().strip('"')
+        return text if 20 <= len(text) <= 2000 else None
     except Exception:
         return None
 
