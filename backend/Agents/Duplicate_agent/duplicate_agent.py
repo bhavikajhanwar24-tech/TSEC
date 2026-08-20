@@ -337,7 +337,7 @@ def node_embed_and_search(state: AgentState) -> AgentState:
         for hit in mem_hits:
             meta = hit["metadata"]
             number = meta.get("number")
-            if not number or number in seen:
+            if not number or number == incoming_number or number in seen:
                 continue
             seen.add(number)
             candidates.append(
