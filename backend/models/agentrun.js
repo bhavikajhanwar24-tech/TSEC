@@ -37,6 +37,20 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    step: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    status: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: "running",
+    },
+    output: {
+      type: DataTypes.JSON,
+      allowNull: true,
+    },
   });
 
   AgentRun.associate = (models) => {

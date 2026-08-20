@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const express = require("express");
 const path = require("path");
 const { runAgentJob } = require("./agents");
+const { ensureIssue, saveWorkflow, saveAgentRun } = require("../services/workflowService");
 
 const router = express.Router();
 const duplicateAgentDir = path.join(__dirname, "..", "Agents", "Duplicate_agent");
@@ -23,48 +24,101 @@ function getAnalysis(owner, repo, number) {
   return analyses.get(analysisKey(owner, repo, number));
 }
 
-function startAgent(name, agentDir, script, args, stdinPayload, env, record) {
-  record.agents[name] = { status: "running", startedAt: new Date().toISOString() };
-  return runAgentJob(agentDir, script, args, stdinPayload, env)
-    .then((result) => {
-      record.agents[name] = { status: "complete", result, completedAt: new Date().toISOString() };
-    })
-    .catch((error) => {
-      record.agents[name] = { status: "failed", error: error.message, completedAt: new Date().toISOString() };
-    });
+async function getPersistedAnalysis(owner, repo, number) {
+  try {
+    const { Issue } = require("../models");
+    const issue = await Issue.findOne({ where: { repoFullName: `${owner}/${repo}`, number }, include: [{ association: "agentRuns" }] });
+    if (!issue) return null;
+    return {
+      issue: issue.toJSON(),
+      repository: { owner, name: repo },
+      status: issue.workflowStatus,
+      step: issue.workflowStep,
+      output: issue.workflowOutput,
+      agents: Object.fromEntries((issue.agentRuns || []).map((run) => [run.agentName, { status: run.status, result: run.output, error: run.status === "failed" ? run.reasoning : undefined }])),
+    };
+  } catch (error) {
+    console.error("Workflow database read failed:", error.message);
+    return null;
+  }
 }
 
-function runAllAgents(issue, repository, record, token = process.env.GITHUB_TOKEN) {
+async function startAgent(name, agentDir, script, args, stdinPayload, env, record) {
+  record.agents[name] = { status: "running", startedAt: new Date().toISOString() };
+  try {
+    const result = await runAgentJob(agentDir, script, args, stdinPayload, env);
+    record.agents[name] = { status: "complete", result, completedAt: new Date().toISOString() };
+    await saveAgentRun(record.issueRecord, { step: record.step, status: "running" }, name, result);
+    return result;
+  } catch (error) {
+    record.agents[name] = { status: "failed", error: error.message, completedAt: new Date().toISOString() };
+    await saveAgentRun(record.issueRecord, { step: record.step, status: "complete_with_errors" }, name, { error: error.message }, "failed");
+    return { error: error.message };
+  }
+}
+
+async function githubIssueAction(owner, repo, number, token, method, body) {
+  const endpoint = method === "COMMENT"
+    ? `https://api.github.com/repos/${owner}/${repo}/issues/${number}/comments`
+    : `https://api.github.com/repos/${owner}/${repo}/issues/${number}`;
+  const response = await fetch(endpoint, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json", "User-Agent": "RepoGuardian" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`GitHub issue action failed (${response.status})`);
+}
+
+async function runAllAgents(issue, repository, record, token = process.env.GITHUB_TOKEN) {
   const owner = repository.owner.login;
   const repo = repository.name;
   const env = { GITHUB_TOKEN: token };
-  // Run agents sequentially: each spawns a Python process that imports
-  // chromadb + langgraph (hundreds of MB of RSS). Running all six at once
-  // OOM-kills the Node service on Render's small instances (502).
-  const jobs = [
-    () => startAgent("duplicate", agentDirs.duplicate, "duplicate_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue, env, record),
-    () => startAgent("missingInfo", agentDirs.missingInfo, "missing_info_agent.py", ["--repo", `${owner}/${repo}`, "--issue", String(issue.number)], undefined, env, record),
-    () => startAgent("sensitivity", agentDirs.sensitivity, "sensitivity_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue, env, record),
-    () => startAgent("sentiment", agentDirs.sentiment, "serve.py", [], { owner, repo, issueNumber: issue.number, repo_norms: {} }, env, record),
-    () => startAgent("backlog", agentDirs.backlog, "serve.py", [], { owner, repo, repo_norms: {} }, env, record),
-    () => startAgent("health", agentDirs.health, "health_agent.py", ["--owner", owner, "--repo", repo], undefined, env, record),
+  const steps = [
+    ["duplicate", agentDirs.duplicate, "duplicate_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue],
+    ["missingInfo", agentDirs.missingInfo, "missing_info_agent.py", ["--repo", `${owner}/${repo}`, "--issue", String(issue.number)], undefined],
+    ["sensitivity", agentDirs.sensitivity, "sensitivity_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue],
+    ["sentiment", agentDirs.sentiment, "serve.py", [], { owner, repo, issueNumber: issue.number, repo_norms: {} }],
+    ["backlog", agentDirs.backlog, "serve.py", [], { owner, repo, repo_norms: {} }],
+    ["health", agentDirs.health, "health_agent.py", ["--owner", owner, "--repo", repo], undefined],
   ];
-  return jobs
-    .reduce((chain, job) => chain.then(job), Promise.resolve())
-    .then(() => {
-      record.status = Object.values(record.agents).some((agent) => agent.status === "failed") ? "complete_with_errors" : "complete";
-      record.completedAt = new Date().toISOString();
-    });
+  for (const [name, dir, script, args, payload] of steps) {
+    record.step += 1;
+    await saveWorkflow(record.issueRecord, { step: record.step, status: "running", output: record });
+    const result = await startAgent(name, dir, script, args, payload, env, record);
+    if (name === "duplicate" && result.is_direct_duplicate) {
+      const match = result.matches?.find((item) => item.classification === "direct_duplicate");
+      const comment = `This issue appears to duplicate #${match?.issue_number || "an existing issue"}. Duplicate analysis found a matching open issue: ${match?.url || ""}`;
+      await githubIssueAction(owner, repo, issue.number, token, "COMMENT", { body: comment });
+      await githubIssueAction(owner, repo, issue.number, token, "PATCH", { state: "closed", state_reason: "duplicate" });
+      record.status = "stopped_duplicate";
+      record.stopReason = "Duplicate detected; issue commented and closed.";
+      await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
+      return;
+    }
+    if (name === "missingInfo" && result.missing_fields?.length) {
+      if (result.draft_comment) await githubIssueAction(owner, repo, issue.number, token, "POST", { body: result.draft_comment });
+      record.status = "waiting_missing_info";
+      record.stopReason = "Missing information requested from the reporter.";
+      await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
+      return;
+    }
+  }
+  record.status = "complete";
+  record.completedAt = new Date().toISOString();
+  await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
 }
 
-function createAnalysis(issue, repository, token) {
+async function createAnalysis(issue, repository, token) {
+  const issueRecord = await ensureIssue(issue, repository.owner.login, repository.name);
   const record = {
     issue,
     repository: { owner: repository.owner.login, name: repository.name },
     status: "running",
     createdAt: new Date().toISOString(),
     agents: {},
+    step: 0,
   };
+  Object.defineProperty(record, "issueRecord", { value: issueRecord, enumerable: false, writable: true });
   analyses.set(analysisKey(repository.owner.login, repository.name, issue.number), record);
   runAllAgents(issue, repository, record, token).catch((error) => {
     record.status = "failed";
@@ -81,11 +135,13 @@ function validSignature(req) {
   return signature.length === expected.length && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
-router.post("/github", (req, res) => {
+router.post("/github", async (req, res) => {
   if (!validSignature(req)) return res.status(401).json({ error: "Invalid webhook signature" });
 
   const event = req.get("x-github-event");
-  if (event !== "issues" || req.body.action !== "opened") {
+  const issueEvent = event === "issues" && ["opened", "edited", "reopened"].includes(req.body.action);
+  const reporterReply = event === "issue_comment" && req.body.action === "created";
+  if (!issueEvent && !reporterReply) {
     return res.status(202).json({ accepted: true, processed: false });
   }
 
@@ -100,13 +156,20 @@ router.post("/github", (req, res) => {
     return res.status(503).json({ error: "GITHUB_TOKEN is not configured for automatic agents" });
   }
 
-  const record = createAnalysis(issue, repository, process.env.GITHUB_TOKEN);
+  let existing = getAnalysis(repository.owner.login, repository.name, issue.number);
+  if (!existing) existing = await getPersistedAnalysis(repository.owner.login, repository.name, issue.number);
+  const isResume = reporterReply || req.body.action === "edited";
+  if (isResume && existing?.status !== "waiting_missing_info") {
+    return res.status(202).json({ accepted: true, processed: false, issue: issue.number });
+  }
+  const record = await createAnalysis(issue, repository, process.env.GITHUB_TOKEN);
   res.status(202).json({ accepted: true, processed: true, issue: issue.number });
 });
 
 router.get("/analysis/:owner/:repo/:number", async (req, res) => {
   if (!req.session?.githubToken) return res.status(401).json({ error: "Not authenticated" });
   let record = getAnalysis(req.params.owner, req.params.repo, req.params.number);
+  if (!record) record = await getPersistedAnalysis(req.params.owner, req.params.repo, req.params.number);
   if (!record) {
     try {
       const issueUrl = `https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/issues/${encodeURIComponent(req.params.number)}`;
@@ -125,7 +188,7 @@ router.get("/analysis/:owner/:repo/:number", async (req, res) => {
       const issue = await response.json();
       if (issue.pull_request || issue.state !== "open") return res.status(400).json({ error: "Automatic analysis is available for open issues only" });
       try {
-        record = createAnalysis(issue, { owner: { login: req.params.owner }, name: req.params.repo }, req.session.githubToken);
+        record = await createAnalysis(issue, { owner: { login: req.params.owner }, name: req.params.repo }, req.session.githubToken);
       } catch (error) {
         console.error("Issue analysis start failed:", error);
         return res.status(500).json({ error: `Could not start analysis: ${error.message}` });

@@ -42,6 +42,20 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.DATE,
       allowNull: true,
     },
+    workflowStatus: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: "queued",
+    },
+    workflowStep: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    workflowOutput: {
+      type: DataTypes.JSON,
+      allowNull: true,
+    },
   });
 
   Issue.associate = (models) => {

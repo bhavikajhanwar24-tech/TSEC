@@ -119,6 +119,14 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .analysis-summary strong { font-family: 'Space Grotesk', sans-serif; font-size: 21px; }
 .analysis-summary span { color: #b6c0ce; font-size: 11px; margin-top: 4px; }
 .agent-result-grid { display: grid; gap: 12px; }
+.decision-panel { background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--blue); border-radius: 10px; margin-bottom: 12px; padding: 17px; }
+.decision-panel h3 { font-size: 15px; margin: 0 0 6px; }
+.decision-panel > p:not(.eyebrow) { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.duplicate-panel { border-left-color: #d65b5b; }
+.missing-panel { border-left-color: #d49a20; }
+.sensitivity-panel { border-left-color: #8b5cf6; }
+.match-card { align-items: center; background: #fbfcfe; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); display: flex; font-size: 13px; justify-content: space-between; margin-top: 8px; padding: 11px; text-decoration: none; }
+.match-card span { color: var(--muted); font-size: 11px; }
 .agent-result-card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
 .agent-card-heading { align-items: flex-start; display: flex; gap: 12px; justify-content: space-between; }
 .agent-result-card h3 { font-size: 14px; margin: 0 0 4px; }
