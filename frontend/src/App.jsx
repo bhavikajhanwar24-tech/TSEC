@@ -480,6 +480,7 @@ function TrendChart({
   markerIndex,
   projection,
   badge,
+  releases,
 }) {
   const w = 280;
   const h = 88;
@@ -573,6 +574,24 @@ function TrendChart({
             />
           </g>
         )}
+        {(releases || []).map((release, i) => {
+          const rx = xOf(release.weekIndex);
+          return (
+            <line
+              key={`rel-${i}`}
+              x1={rx.toFixed(1)}
+              y1={pad}
+              x2={rx.toFixed(1)}
+              y2={h - pad}
+              stroke="#f5f0eb"
+              strokeWidth="1"
+              strokeDasharray="2 3"
+              opacity="0.55"
+            >
+              <title>{`release ${release.tag} — ${release.label}`}</title>
+            </line>
+          );
+        })}
       </svg>
       <div className="health-chart-labels">
         <span>{labels[0]}</span>
@@ -649,7 +668,7 @@ function projectSeries(values, points = 3) {
   );
 }
 
-function BacklogFlowChart({ labels, opened, closed, backlog, color }) {
+function BacklogFlowChart({ labels, opened, closed, backlog, color, releases }) {
   const w = 280;
   const h = 100;
   const pad = 8;
@@ -738,6 +757,24 @@ function BacklogFlowChart({ labels, opened, closed, backlog, color }) {
             <title>{`${labels[i]}: net ${net[i] >= 0 ? "+" : ""}${net[i]} issues`}</title>
           </circle>
         ))}
+        {(releases || []).map((release, i) => {
+          const rx = xOf(release.weekIndex);
+          return (
+            <line
+              key={`rel-${i}`}
+              x1={rx.toFixed(1)}
+              y1={pad}
+              x2={rx.toFixed(1)}
+              y2={h - pad}
+              stroke="#f5f0eb"
+              strokeWidth="1"
+              strokeDasharray="2 3"
+              opacity="0.55"
+            >
+              <title>{`release ${release.tag} — ${release.label}`}</title>
+            </line>
+          );
+        })}
         {backlogPts.map(([x, y], i) => (
           <circle
             key={i}
@@ -834,13 +871,21 @@ function ContributorStackChart({ labels, active, fresh }) {
   );
 }
 
+function contributorIntensityBucket(count) {
+  const value = Number(count) || 0;
+  if (value <= 0) return "";
+  if (value <= 2) return "low";
+  if (value <= 5) return "mid";
+  return "high";
+}
+
 function ContributorHeatmap({ rows, labels }) {
   if (!Array.isArray(rows) || !rows.length) return null;
   return (
     <div className="health-chart-card heatmap-card">
       <div className="health-chart-heading">
         <strong>Contributor heatmap</strong>
-        <span>{rows.length} contributors · comment activity</span>
+        <span>{rows.length} contributors · comments per week</span>
       </div>
       <div
         className="heatmap-grid"
@@ -857,57 +902,211 @@ function ContributorHeatmap({ rows, labels }) {
         {rows.map((row) => (
           <Fragment key={row.login}>
             <span className="heatmap-cell heatmap-user">@{row.login}</span>
-            {(row.weeks || []).map((active, i) => (
+            {(row.weeks || []).map((count, i) => (
               <span
-                className={`heatmap-cell heatmap-dot ${active ? "active" : ""}`}
+                className={`heatmap-cell heatmap-dot ${contributorIntensityBucket(count)}`}
                 key={i}
-                title={`${row.login} — ${labels[i] || "?"}: ${active ? "active" : "inactive"}`}
+                title={`${row.login} — ${labels[i] || "?"}: ${count || 0} comments`}
               />
             ))}
           </Fragment>
+        ))}
+      </div>
+      <div className="health-chart-labels heatmap-legend">
+        <span>
+          <i className="heatmap-swatch" /> none
+        </span>
+        <span>
+          <i className="heatmap-swatch low" /> 1-2
+        </span>
+        <span>
+          <i className="heatmap-swatch mid" /> 3-5
+        </span>
+        <span>
+          <i className="heatmap-swatch high" /> 6+
+        </span>
+      </div>
+    </div>
+  );
+}
+
+const METRIC_CONFIG = [
+  { key: "time_to_first_response_days", label: "Response time (days)", higherIsWorse: true, threshold: 1.5, zeroIsMissing: true },
+  { key: "backlog_size", label: "Backlog", higherIsWorse: true, threshold: 1.3 },
+  { key: "incoming_volume", label: "Opened / week", higherIsWorse: true, threshold: 1.5 },
+  { key: "issues_closed", label: "Closed / week", higherIsWorse: false, threshold: 0.67 },
+  { key: "close_open_ratio", label: "Close/open ratio", higherIsWorse: false, threshold: 0.67 },
+  { key: "duplicate_rate", label: "Duplicate %", higherIsWorse: true, threshold: 1.5 },
+  { key: "pr_merge_latency_days", label: "PR latency (days)", higherIsWorse: true, threshold: 1.5, zeroIsMissing: true },
+  { key: "active_contributors", label: "Active contributors", higherIsWorse: false, threshold: 0.67 },
+  { key: "new_contributors", label: "New contributors", higherIsWorse: false, threshold: 0.67 },
+];
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const n = sorted.length;
+  if (!n) return 0;
+  const mid = Math.floor(n / 2);
+  return n % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function metricStatus(config, series) {
+  const values = series[config.key] || [];
+  if (values.length < 5) return null;
+  let baseline = values.slice(-6, -2);
+  let recent = values.slice(-2);
+  if (config.zeroIsMissing) {
+    baseline = baseline.filter((v) => v > 0);
+    recent = recent.filter((v) => v > 0);
+    if (!baseline.length || !recent.length) return null;
+  }
+  const baseMed = median(baseline);
+  const recMed = median(recent);
+  if (!baseMed && !recMed) return null;
+  const ratio = baseMed > 0 ? Math.min(recMed / baseMed, 10) : recMed > 0 ? 10 : 0;
+  const worse = config.higherIsWorse ? ratio >= config.threshold : ratio <= config.threshold;
+  const moved = config.higherIsWorse ? ratio > 1 : ratio < 1;
+  return {
+    baseline: Math.round(baseMed * 100) / 100,
+    recent: Math.round(recMed * 100) / 100,
+    ratio: Math.round(ratio * 100) / 100,
+    status: worse ? "declining" : moved ? "watch" : "healthy",
+  };
+}
+
+function HealthTrafficTable({ labels, series }) {
+  const rows = METRIC_CONFIG.filter((config) => Array.isArray(series[config.key]) && series[config.key].length)
+    .map((config) => ({ config, check: metricStatus(config, series) }))
+    .filter((row) => row.check);
+  if (!rows.length) return null;
+  return (
+    <div className="health-chart-card snapshot-card">
+      <div className="health-chart-heading">
+        <strong>Metric health</strong>
+        <span>
+          recent 2 weeks vs prior baseline · {labels[0]} →{" "}
+          {labels[labels.length - 1]}
+        </span>
+      </div>
+      <div className="snapshot-table">
+        <div className="snapshot-row snapshot-head">
+          <span>metric</span>
+          <span>baseline</span>
+          <span>recent</span>
+          <span>trend</span>
+        </div>
+        {rows.map(({ config, check }) => (
+          <div className="snapshot-row" key={config.key}>
+            <span>{config.label}</span>
+            <span>{check.baseline}</span>
+            <span>
+              <i className={`traffic-dot ${check.status}`} /> {check.recent}
+            </span>
+            <span className={`traffic-trend ${check.status}`}>
+              {config.higherIsWorse
+                ? check.ratio >= 1
+                  ? `▲ ${check.ratio}x`
+                  : `▼ ${check.ratio}x`
+                : check.ratio <= 1
+                  ? `▼ ${check.ratio}x`
+                  : `▲ ${check.ratio}x`}{" "}
+              {check.status}
+            </span>
+          </div>
         ))}
       </div>
     </div>
   );
 }
 
-function HealthSnapshotTable({ labels, series }) {
-  const rows = [
-    { key: "time_to_first_response_days", label: "Response (days)" },
-    { key: "backlog_size", label: "Backlog" },
-    { key: "incoming_volume", label: "Opened" },
-    { key: "issues_closed", label: "Closed" },
-    { key: "close_open_ratio", label: "Close/open ratio" },
-    { key: "duplicate_rate", label: "Duplicate %" },
-    { key: "pr_merge_latency_days", label: "PR latency (d)" },
-    { key: "active_contributors", label: "Contributors" },
-    { key: "new_contributors", label: "New contributors" },
-  ].filter((r) => Array.isArray(series[r.key]) && series[r.key].length);
-  if (!rows.length || !labels.length) return null;
+function MetricDragBars({ series, labels }) {
+  const [windowWeeks, setWindowWeeks] = useState(4);
+  const handlePointer = (event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    setWindowWeeks(Math.max(2, Math.min(6, Math.round(ratio * 4) + 2)));
+  };
+  const rows = METRIC_CONFIG.filter(
+    (config) =>
+      Array.isArray(series[config.key]) && series[config.key].length >= 5,
+  )
+    .map((config) => {
+      const values = series[config.key].map((v) => Number(v) || 0);
+      let baseline = values.slice(-windowWeeks - 2, -2);
+      let recent = values.slice(-2);
+      if (config.zeroIsMissing) {
+        baseline = baseline.filter((v) => v > 0);
+        recent = recent.filter((v) => v > 0);
+      }
+      if (!baseline.length || !recent.length) return null;
+      return { config, baseline: median(baseline), recent: median(recent) };
+    })
+    .filter(Boolean);
+  const tick = windowWeeks - 2;
   return (
-    <div className="health-chart-card snapshot-card">
+    <div className="health-chart-card drag-bars-card">
       <div className="health-chart-heading">
-        <strong>Weekly snapshot</strong>
-        <span>
-          {labels[0]} → {labels[labels.length - 1]}
+        <strong>Metric comparison</strong>
+        <span>drag the handle to change the baseline window</span>
+      </div>
+      <div
+        className="drag-bars-slider"
+        role="slider"
+        aria-label="baseline window weeks"
+        aria-valuemin={2}
+        aria-valuemax={6}
+        aria-valuenow={windowWeeks}
+        onPointerDown={handlePointer}
+        onPointerMove={(event) => {
+          if (event.buttons > 0) handlePointer(event);
+        }}
+      >
+        <span className="drag-bars-track" />
+        <span
+          className="drag-bars-handle"
+          style={{ left: `${(tick / 4) * 100}%` }}
+        >
+          <strong>{windowWeeks}</strong> wk baseline
+        </span>
+        <span className="drag-bars-range">
+          <span>2</span>
+          <span>3</span>
+          <span>4</span>
+          <span>5</span>
+          <span>6</span>
         </span>
       </div>
-      <div className="snapshot-table">
-        <div className="snapshot-row snapshot-head">
-          <span>metric</span>
-          {labels.map((l) => (
-            <span key={l}>{l.length > 8 ? l.slice(5) : l}</span>
-          ))}
-        </div>
-        {rows.map((r) => (
-          <div className="snapshot-row" key={r.key}>
-            <span>{r.label}</span>
-            {series[r.key].map((v, i) => (
-              <span key={i}>{Math.round(Number(v) * 100) / 100}</span>
-            ))}
+      {rows.map(({ config, baseline, recent }) => {
+        const check = metricStatus(config, series);
+        const status = check?.status || "healthy";
+        const max = Math.max(baseline, recent, 1);
+        const colors = { healthy: "#2f9e6e", watch: "#e5a13c", declining: "#e5484d" };
+        return (
+          <div className="drag-bar-row" key={config.key}>
+            <span className="drag-bar-label">{config.label}</span>
+            <div className="drag-bar-tracks">
+              <div className="drag-bar-track">
+                <i
+                  className="drag-bar baseline"
+                  style={{ width: `${(baseline / max) * 100}%` }}
+                />
+              </div>
+              <div className="drag-bar-track">
+                <i
+                  className="drag-bar recent"
+                  style={{
+                    width: `${(recent / max) * 100}%`,
+                    background: colors[status],
+                  }}
+                />
+              </div>
+            </div>
+            <span className="drag-bar-values">
+              {baseline} → {recent}
+            </span>
           </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }
@@ -925,6 +1124,18 @@ function deriveHealthScore(trends) {
       score -= ratio <= 0.67 ? 15 : 8;
   });
   return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function isoWeekKey(isoString) {
+  if (!isoString) return "";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return "";
+  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((date - yearStart) / 86400000 + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
 }
 
 function HealthTrendDetail({ result }) {
@@ -953,6 +1164,14 @@ function HealthTrendDetail({ result }) {
     : undefined;
   const prLatency = series.pr_merge_latency_days || [];
   const showPr = has("pr_merge_latency_days") && prLatency.some((v) => v > 0);
+  const releaseMarks = (result.releases || [])
+    .map((release) => {
+      const weekIndex = labels.indexOf(isoWeekKey(release.published_at));
+      return weekIndex >= 0
+        ? { tag: release.tag, label: isoWeekKey(release.published_at), weekIndex }
+        : null;
+    })
+    .filter(Boolean);
   const kpis = [
     {
       label: "Response time (latest)",
@@ -1048,6 +1267,7 @@ function HealthTrendDetail({ result }) {
                 ? `degrading since ${responseTrend.change_week}`
                 : undefined
             }
+            releases={releaseMarks}
           />
         )}
         {has("backlog_size") && (
@@ -1057,6 +1277,7 @@ function HealthTrendDetail({ result }) {
             closed={series.issues_closed}
             backlog={series.backlog_size}
             color="#8e4ec6"
+            releases={releaseMarks}
           />
         )}
         {has("duplicate_rate") && (
@@ -1066,6 +1287,8 @@ function HealthTrendDetail({ result }) {
             values={series.duplicate_rate}
             color="#e5a13c"
             format={(v) => `${v}%`}
+            projection={projectSeries(series.duplicate_rate)}
+            releases={releaseMarks}
           />
         )}
         {showPr && (
@@ -1075,6 +1298,8 @@ function HealthTrendDetail({ result }) {
             values={series.pr_merge_latency_days}
             color="#0ea5e9"
             format={(v) => `${v} days`}
+            projection={projectSeries(series.pr_merge_latency_days)}
+            releases={releaseMarks}
           />
         )}
         {has("active_contributors") && (
@@ -1091,6 +1316,8 @@ function HealthTrendDetail({ result }) {
             values={series.close_open_ratio}
             color="#14b8a6"
             format={(v) => `${v}`}
+            projection={projectSeries(series.close_open_ratio)}
+            releases={releaseMarks}
           />
         )}
         {has("incoming_volume") && (
@@ -1100,14 +1327,16 @@ function HealthTrendDetail({ result }) {
             values={series.incoming_volume}
             color="#2f9e6e"
             format={(v) => `${v}`}
+            releases={releaseMarks}
           />
         )}
       </div>
+      <MetricDragBars series={series} labels={labels} />
       <ContributorHeatmap
         rows={result.contributor_matrix || []}
         labels={labels}
       />
-      <HealthSnapshotTable labels={labels} series={series} />
+      <HealthTrafficTable labels={labels} series={series} />
       {contributors.length > 0 && (
         <div className="result-list">
           <strong>Contributor activity</strong>
@@ -1171,8 +1400,7 @@ function HealthPanel({ owner, repo }) {
     try {
       await api("/api/agents/health-run", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ owner, repo }),
+        body: { owner, repo },
       });
       fetchRun();
     } catch {
@@ -1236,7 +1464,7 @@ function HealthPanel({ owner, repo }) {
           <p>{run.error}</p>
         </div>
       )}
-      {!run && (
+      {(run?.status === "idle" || !run) && (
         <div className="waiting-detail">
           <span className="waiting-orbit">♥</span>
           <strong>No health sweep run yet</strong>
@@ -1244,6 +1472,126 @@ function HealthPanel({ owner, repo }) {
             Run the Health-Trend Investigator to see the repository health
             dashboard with trend charts and root-cause analysis.
           </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SweepsPanel({ owner, repo }) {
+  const [data, setData] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState("");
+  const fetchStatus = () => {
+    api("/api/agents/sweeps").then(setData).catch(() => setData(null));
+  };
+  useEffect(() => {
+    fetchStatus();
+  }, [owner, repo]);
+  const runNow = async () => {
+    setRunning(true);
+    setError("");
+    try {
+      await api("/api/agents/sweeps/run", {
+        method: "POST",
+        body: { owner, repo },
+      });
+      fetchStatus();
+    } catch {
+      setError("Failed to run the staleness sweep.");
+    }
+    setRunning(false);
+  };
+  const myRun = data?.staleness_runs?.find(
+    (run) => run.owner === owner && run.repo === repo,
+  );
+  const history = data?.history || [];
+  return (
+    <div className="panel health-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Scheduled sweeps</p>
+          <h2>Staleness monitor</h2>
+        </div>
+        <span className="count-label">
+          {data?.tracked_repos ?? 0} tracked repos · every 6h
+        </span>
+      </div>
+      <div className="health-panel-toolbar">
+        <span className={`agent-status ${myRun?.status || "idle"}`}>
+          {myRun?.status || "idle"}
+        </span>
+        <button
+          className="outline-button"
+          type="button"
+          onClick={runNow}
+          disabled={running || myRun?.status === "running"}
+        >
+          {running || myRun?.status === "running"
+            ? "Sweeping…"
+            : "Run staleness sweep"}
+        </button>
+      </div>
+      {error && <p className="detail-error">{error}</p>}
+      {myRun && (
+        <div className="staleness-run">
+          <div className="staleness-run-heading">
+            <strong>
+              Last sweep{" "}
+              {myRun.completedAt
+                ? `finished ${new Date(myRun.completedAt).toLocaleString()}`
+                : "in progress"}
+            </strong>
+            {myRun.error && <p className="detail-error">{myRun.error}</p>}
+          </div>
+          {myRun.crossers?.length > 0 ? (
+            <table className="staleness-table">
+              <thead>
+                <tr>
+                  <th>Issue</th>
+                  <th>Reason</th>
+                  <th>Days open</th>
+                </tr>
+              </thead>
+              <tbody>
+                {myRun.crossers.map((crosser) => (
+                  <tr key={crosser.number}>
+                    <td>
+                      <strong>#{crosser.number}</strong> {crosser.title}
+                    </td>
+                    <td>
+                      <span className={`agent-status ${crosser.reason}`}>
+                        {crosser.reason}
+                      </span>
+                    </td>
+                    <td>{crosser.days_open}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="staleness-clean">
+              No issues crossed the staleness threshold in the latest sweep.
+            </p>
+          )}
+        </div>
+      )}
+      {history.length > 0 && (
+        <div className="sweep-history">
+          <strong>Recent sweeps</strong>
+          <ul>
+            {history.slice(0, 6).map((sweep, index) => (
+              <li key={`${sweep.owner}/${sweep.repo}-${index}`}>
+                <span className={`agent-status ${sweep.status}`}>
+                  {sweep.status}
+                </span>
+                <span>
+                  {sweep.owner}/{sweep.repo} · {sweep.type} ·{" "}
+                  {sweep.crossers.length} crossers
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>
@@ -1824,6 +2172,76 @@ function CentralAnalysisDashboard({
   );
 }
 
+function PlannerPanel({ planner }) {
+  const decision = planner.decision || {};
+  const routing = planner.routing || {};
+  const trace = planner.trace || [];
+  return (
+    <section className="decision-panel planner-panel">
+      <p className="eyebrow">Planner</p>
+      <h3>Investigation plan</h3>
+      <div className="planner-verdict">
+        <span className={`agent-status ${decision.verdict || "analyzing"}`}>
+          {decision.verdict || "analyzing"}
+        </span>
+        {decision.confidence != null && (
+          <span className="planner-confidence">
+            {Math.round(decision.confidence * 100)}% confidence
+          </span>
+        )}
+      </div>
+      {decision.summary && <Markdown text={decision.summary} />}
+      {routing.agents?.length > 0 && (
+        <div className="planner-routing">
+          <strong>Routed agents</strong>
+          <ul>
+            {routing.agents.map((name, index) => (
+              <li key={name}>
+                <span className="routing-chip">{name}</span>
+                <span className="routing-reason">
+                  {routing.rationale?.[index] || "selected for investigation"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {trace.length > 0 && (
+        <div className="planner-trace">
+          <strong>Tool trace</strong>
+          <ol>
+            {trace.map((step) => (
+              <li key={step.step} className="planner-trace-step">
+                <span className="trace-tool">{step.tool}</span>
+                {step.note && <span className="trace-note">{step.note}</span>}
+                {step.input && (
+                  <code className="trace-input" title={String(step.input)}>
+                    {String(step.input).slice(0, 90)}
+                    {String(step.input).length > 90 ? "…" : ""}
+                  </code>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {planner.suggested_actions?.length > 0 && (
+        <div className="planner-actions">
+          <strong>Suggested actions (require approval)</strong>
+          <ul>
+            {planner.suggested_actions.map((action, index) => (
+              <li key={`${action.kind}-${index}`}>
+                <code>{action.kind}</code>
+                <span>{action.preview}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AgentAnalysisView({ owner, repo, issue, onClose }) {
   const [analysis, setAnalysis] = useState(null);
   const [error, setError] = useState("");
@@ -1876,14 +2294,22 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
     };
   }, [owner, repo, issue.number, notTriggered, onClose]);
 
-  const agents = automaticAgents.map(([key, label, hint]) => ({
-    key,
-    label,
-    hint,
-    ...(analysis?.agents?.[key] || { status: "waiting" }),
-  }));
-  const complete = agents.filter((agent) => agent.status === "complete").length;
-  const failed = agents.filter((agent) => agent.status === "failed").length;
+  const routedNames = new Set(
+    (analysis?.planner?.routing?.agents || []).map((name) =>
+      name === "missing_info" ? "missingInfo" : name,
+    ),
+  );
+  const plannerRouted = (analysis?.planner?.routing?.agents || []).length > 0;
+  const agents = automaticAgents.map(([key, label, hint]) => {
+    const status =
+      plannerRouted && !routedNames.has(key)
+        ? "skipped"
+        : analysis?.agents?.[key]?.status || "waiting";
+    return { key, label, hint, ...(analysis?.agents?.[key] || { status }) };
+  });
+  const activeAgents = agents.filter((agent) => agent.status !== "skipped");
+  const complete = activeAgents.filter((agent) => agent.status === "complete").length;
+  const failed = activeAgents.filter((agent) => agent.status === "failed").length;
 
   const duplicate = agents.find((agent) => agent.key === "duplicate")?.result;
   const duplicateMatches =
@@ -1899,7 +2325,7 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
       <CentralAnalysisDashboard
         issue={issue}
         analysis={analysis}
-        agents={agents}
+        agents={activeAgents}
         complete={complete}
         failed={failed}
         error={error}
@@ -1963,6 +2389,7 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
                 <span>errors</span>
               </div>
             </div>
+            {analysis?.planner && <PlannerPanel planner={analysis.planner} />}
             {duplicateMatches.length > 0 && (
               <section className="decision-panel duplicate-panel">
                 <p className="eyebrow">Duplicate flow</p>
@@ -2020,7 +2447,7 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
             )}
             {error && <p className="detail-error">{error}</p>}
             <div className="agent-result-grid">
-              {agents.map((agent) => (
+              {activeAgents.map((agent) => (
                 <article className="agent-result-card" key={agent.key}>
                   <div className="agent-card-heading">
                     <div>
@@ -2397,7 +2824,12 @@ function RepositoryTabDashboard({
       Number(escalationDecisions[first.number]?.aggregateConfidence || 0),
   );
   const content = {
-    Health: <HealthPanel owner={repo.owner.login} repo={repo.name} />,
+    Health: (
+      <>
+        <HealthPanel owner={repo.owner.login} repo={repo.name} />
+        <SweepsPanel owner={repo.owner.login} repo={repo.name} />
+      </>
+    ),
     Issues: (
       <div className="panel">
         <div className="panel-heading">

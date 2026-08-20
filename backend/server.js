@@ -80,6 +80,8 @@ app.use("/api/issues", escalationRoutes);
 app.use("/api", apiRoutes);
 app.use("/api/agents", agentRoutes);
 app.get("/health", (req, res) => res.json({ ok: true }));
+const sweepService = require("./services/sweepService");
+sweepService.startScheduler();
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

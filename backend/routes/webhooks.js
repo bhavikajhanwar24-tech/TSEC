@@ -4,6 +4,8 @@ const path = require("path");
 const { runAgentJob } = require("./agents");
 const { ensureIssue, saveWorkflow, saveAgentRun, saveIssueTimeline } = require("../services/workflowService");
 const { indexDocuments } = require("../services/ragService");
+const { enqueue } = require("../services/eventQueue");
+const sweepService = require("../services/sweepService");
 
 const router = express.Router();
 const duplicateAgentDir = path.join(__dirname, "..", "Agents", "Duplicate_agent");
@@ -14,6 +16,7 @@ const agentDirs = {
   sentiment: path.join(__dirname, "..", "Agents", "sentiment_analysis"),
   backlog: path.join(__dirname, "..", "Agents", "backlog_agent"),
   health: path.join(__dirname, "..", "Agents", "Health_agent"),
+  planner: path.join(__dirname, "..", "Agents", "planner_agent"),
 };
 const analyses = new Map();
 let lastWebhook = null;
@@ -110,7 +113,7 @@ async function githubIssueAction(owner, repo, number, token, method, body) {
   if (!response.ok) throw new Error(`GitHub issue action failed (${response.status})`);
 }
 
-async function runAllAgents(issue, repository, record, token = process.env.GITHUB_TOKEN) {
+async function runAllAgents(issue, repository, record, token = process.env.GITHUB_TOKEN, selectedAgents = null) {
   const owner = repository.owner.login;
   const repo = repository.name;
   const env = { GITHUB_TOKEN: token };
@@ -121,6 +124,12 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     ["sentiment", agentDirs.sentiment, "serve.py", [], { owner, repo, issueNumber: issue.number, repo_norms: {} }],
     ["backlog", agentDirs.backlog, "serve.py", [], { owner, repo, repo_norms: {} }, 240000],
   ];
+  // The Planner decides which agents run; when it produced no routing list
+  // (or failed), fall back to the full pipeline.
+  const routed = new Set((selectedAgents || []).map((name) => (name === "missing_info" ? "missingInfo" : name)));
+  const activeSteps = routed.size > 0
+    ? steps.filter(([name]) => routed.has(name))
+    : steps;
   let nextStep = record.step;
   async function runStep([name, dir, script, args, payload, timeoutMs]) {
     const rerun = (name === "duplicate" && record.resumeDuplicate) ||
@@ -133,7 +142,7 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     return { name, result: await startAgent(name, dir, script, args, payload, env, record, step, timeoutMs) };
   }
 
-  for (const stepDefinition of steps.slice(0, 2)) {
+  for (const stepDefinition of activeSteps.slice(0, 2)) {
     const stepResult = await runStep(stepDefinition);
     if (!stepResult) continue;
     const { name, result } = stepResult;
@@ -177,7 +186,7 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     }
   }
 
-  const remaining = steps.slice(2).filter(([name]) => !record.agents[name] || record.agents[name].status !== "complete");
+const remaining = activeSteps.slice(2).filter(([name]) => !record.agents[name] || record.agents[name].status !== "complete");
   for (const stepDefinition of remaining) {
     await runStep(stepDefinition);
   }
@@ -186,7 +195,32 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
   await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
 }
 
-async function createAnalysis(issue, repository, token, persisted) {
+/** Run the Planner on the event, store its visible trace, and return the
+ * routed agent list it selected. Never fails the pipeline: on error the
+ * routing falls back to `null` (full pipeline). */
+async function runPlanner(issue, repository, token, event, record) {
+  const env = { GITHUB_TOKEN: token };
+  try {
+    const planner = await runAgentJob(
+      agentDirs.planner,
+      "planner.py",
+      ["--owner", repository.owner.login, "--repo", repository.name, "--issue-json", "-", "--event", event || "issues.opened"],
+      issue,
+      env,
+      120000,
+    );
+    record.planner = planner.planner || planner;
+    record.planner.routing = record.planner.routing || { agents: [], rationale: [] };
+    record.planner.routing.agents = record.planner.routing.agents || [];
+    return record.planner;
+  } catch (error) {
+    record.plannerError = error.message;
+    console.error(`Planner failed for ${repository.owner.login}/${repository.name}#${issue.number}:`, error.message);
+    return null;
+  }
+}
+
+async function createAnalysis(issue, repository, token, persisted, event = "issues.opened") {
   const issueRecord = await ensureIssue(issue, repository.owner.login, repository.name);
   const completedSteps = Object.values(persisted?.agents || {}).filter((agent) => agent.status === "complete").length;
   const record = {
@@ -198,14 +232,25 @@ async function createAnalysis(issue, repository, token, persisted) {
     step: completedSteps,
     resumeMissingInfo: persisted?.status === "waiting_missing_info",
     resumeDuplicate: persisted?.status === "waiting_duplicate_info",
+    event,
   };
   Object.defineProperty(record, "issueRecord", { value: issueRecord, enumerable: false, writable: true });
   analyses.set(analysisKey(repository.owner.login, repository.name, issue.number), record);
   await saveWorkflow(issueRecord, { step: record.step, status: "running", output: record });
-  runAllAgents(issue, repository, record, token).catch(async (error) => {
-    record.status = "failed";
-    record.error = error.message;
-    await saveWorkflow(issueRecord, { step: record.step, status: record.status, output: record });
+  enqueue({
+    type: "agent_analysis",
+    key: analysisKey(repository.owner.login, repository.name, issue.number),
+    run: async () => {
+      // 1. Planner decides what to investigate (visible trace stored).
+      const planner = await runPlanner(issue, repository, token, event, record);
+      const routed = planner?.routing?.agents || null;
+      // 2. Only the routed subagents run — dynamic, not a fixed pipeline.
+      await runAllAgents(issue, repository, record, token, routed).catch(async (error) => {
+        record.status = "failed";
+        record.error = error.message;
+        await saveWorkflow(issueRecord, { step: record.step, status: record.status, output: record });
+      });
+    },
   });
   return record;
 }
@@ -233,11 +278,13 @@ router.post(["/github", "/"], async (req, res) => {
   }
 
   const issueEvent = event === "issues" && ["opened", "reopened"].includes(req.body.action);
-  const pullRequestEvent = event === "pull_request" && ["opened", "reopened", "edited", "closed"].includes(req.body.action);
+  const pullRequestEvent = event === "pull_request" && ["opened", "reopened"].includes(req.body.action);
+  const prSynchronizeEvent = event === "pull_request" && req.body.action === "synchronize";
+  const reviewEvent = event === "pull_request_review" && req.body.action === "submitted";
   const commentEvent = event === "issue_comment" && req.body.action === "created";
   const pushEvent = event === "push";
   const reporterReply = event === "issue_comment" && req.body.action === "created" && isHumanIssueComment(req.body);
-  if (!issueEvent && !pullRequestEvent && !commentEvent && !pushEvent) {
+  if (!issueEvent && !pullRequestEvent && !prSynchronizeEvent && !reviewEvent && !commentEvent && !pushEvent) {
     return res.status(202).json({ accepted: true, processed: false });
   }
 
@@ -245,6 +292,7 @@ router.post(["/github", "/"], async (req, res) => {
   if (!repository?.owner?.login || !repository?.name) {
     return res.status(400).json({ error: "Invalid repository webhook payload" });
   }
+  sweepService.trackRepo(repository.owner.login, repository.name);
 
   if (pushEvent) {
     indexDocuments(repository.owner.login, repository.name, (req.body.commits || []).map((commit) => ({
@@ -277,7 +325,45 @@ router.post(["/github", "/"], async (req, res) => {
     }]);
   }
 
-  if (pullRequestEvent || (commentEvent && !reporterReply)) {
+  // PR events (opened / reopened / synchronize / review submitted) run the
+  // Planner for CI + linked-issue context; agent pipelines stay issue-only.
+  if (pullRequestEvent || prSynchronizeEvent || reviewEvent) {
+    const pr = req.body.pull_request || {};
+    if (pr.number) {
+      const prAsIssue = {
+        number: pr.number,
+        title: pr.title || "",
+        body: pr.body || "",
+        user: pr.user || {},
+        pull_request: true,
+        head: { sha: pr.head?.sha || null },
+      };
+      const record = {
+        issue: prAsIssue,
+        repository: { owner: repository.owner.login, name: repository.name },
+        status: "running",
+        createdAt: new Date().toISOString(),
+        agents: {},
+        step: 0,
+        event: event === "pull_request" ? `pull_request.${req.body.action}` : event,
+        plannerOnly: true,
+      };
+      const key = analysisKey(repository.owner.login, repository.name, pr.number);
+      analyses.set(key, record);
+      enqueue({
+        type: "planner_only",
+        key,
+        run: async () => {
+          await runPlanner(prAsIssue, repository, process.env.GITHUB_TOKEN, record.event, record);
+          record.status = "complete";
+          record.completedAt = new Date().toISOString();
+        },
+      });
+    }
+    return res.status(202).json({ accepted: true, processed: true, indexed: true, issue: issue.number, planner: true });
+  }
+
+  if (commentEvent && !reporterReply) {
     return res.status(202).json({ accepted: true, processed: false, indexed: true, issue: issue.number });
   }
 
@@ -311,7 +397,7 @@ router.post(["/github", "/"], async (req, res) => {
   if (!isResume && ["waiting_missing_info", "waiting_duplicate_info"].includes(existing?.status)) {
     return res.status(202).json({ accepted: true, processed: false, issue: issue.number });
   }
-  const record = await createAnalysis(issue, repository, process.env.GITHUB_TOKEN, existing);
+  const record = await createAnalysis(issue, repository, process.env.GITHUB_TOKEN, existing, event === "issues" ? `issues.${req.body.action}` : event);
   lastWebhook.processed = true;
   lastWebhook.issue = issue.number;
   res.status(202).json({ accepted: true, processed: true, issue: issue.number });
@@ -339,6 +425,14 @@ router.get("/analysis/:owner/:repo/:number", async (req, res) => {
   if (!record) record = await getPersistedAnalysis(req.params.owner, req.params.repo, req.params.number);
   if (!record) return res.status(404).json({ error: "No automatic analysis exists for this issue. Analysis starts only when the issue is newly created." });
   res.json(record);
+});
+
+// Planner trace for any event (issue or PR) the planner has investigated.
+router.get("/planner/:owner/:repo/:number", (req, res) => {
+  if (!req.session?.githubToken) return res.status(401).json({ error: "Not authenticated" });
+  const record = getAnalysis(req.params.owner, req.params.repo, req.params.number);
+  if (!record) return res.status(404).json({ error: "No planner run exists for this item yet." });
+  res.json({ planner: record.planner || null, plannerError: record.plannerError || null, status: record.status });
 });
 
 module.exports = router;

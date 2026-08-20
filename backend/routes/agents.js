@@ -271,12 +271,45 @@ router.get("/health-run", requireAuth, (req, res) => {
   }
   const record = healthRuns.get(healthKey(owner, repo));
   if (!record) {
-    return res.status(404).json({ error: "No health sweep has been run for this repository yet." });
+    return res.json({ status: "idle", error: "No health sweep has been run for this repository yet." });
   }
   res.json(record);
+});
+
+// ---- Scheduled sweeps (time-driven monitoring) ----
+const sweepService = require("../services/sweepService");
+
+// GET /api/agents/sweeps — scheduler status + sweep history
+router.get("/sweeps", requireAuth, (req, res) => {
+  res.json(sweepService.status());
+});
+
+// GET /api/agents/sweeps/staleness/:owner/:repo — latest staleness run
+router.get("/sweeps/staleness/:owner/:repo", requireAuth, (req, res) => {
+  const record = sweepService.getStalenessRun(req.params.owner, req.params.repo);
+  if (!record) return res.status(404).json({ error: "No staleness sweep recorded for this repository yet." });
+  res.json(record);
+});
+
+// POST /api/agents/sweeps/run — immediate staleness sweep for one repo
+// Body: { owner, repo }
+router.post("/sweeps/run", requireAuth, async (req, res) => {
+  const { owner, repo } = req.body || {};
+  if (!owner || !repo) return res.status(400).json({ error: "owner and repo are required" });
+  sweepService.trackRepo(owner, repo);
+  const record = await sweepService.runStalenessSweep(owner, repo, req.session.githubToken);
+  res.status(record.status === "complete" ? 200 : 202).json(record);
+});
+
+// POST /api/agents/sweeps/run-all — staleness pass for every tracked repo +
+// weekly health sweep if due
+router.post("/sweeps/run-all", requireAuth, async (req, res) => {
+  const result = await sweepService.sweepAll(req.session.githubToken);
+  res.json(result);
 });
 
 module.exports = router;
 module.exports.runAgent = runAgent;
 module.exports.extractJson = extractJson;
 module.exports.runAgentJob = runAgentJob;
+module.exports.setHealthRun = (owner, repo, record) => healthRuns.set(healthKey(owner, repo), record);

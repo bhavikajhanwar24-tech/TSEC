@@ -40,9 +40,6 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 import requests
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
-from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIAEmbeddings
-from langgraph.graph import END, START, StateGraph
 
 COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common")
 if COMMON_DIR not in sys.path:
@@ -129,7 +126,7 @@ def fetch_issue_series(owner: str, repo: str, weeks: int, max_issues: int = 500)
     # inside the analysis window to bound API calls
     window_start = datetime.now(timezone.utc) - timedelta(weeks=weeks)
     commenters: Dict[str, Dict[str, Any]] = {}   # user -> {count, last_active, first_active}
-    commenters_by_week: Dict[str, set] = defaultdict(set)  # week -> active users
+    commenters_by_week: Dict[str, Counter] = defaultdict(Counter)  # week -> user -> comments that week
     new_by_week: Counter = Counter()             # week -> users whose first comment was that week
     first_response: List[tuple] = []             # (week_key, hours)
     backlog_by_week: Counter = Counter()
@@ -178,7 +175,7 @@ def fetch_issue_series(owner: str, repo: str, weeks: int, max_issues: int = 500)
                 if cdt < info["first_active"]:
                     info["first_active"] = cdt
                 commenters[user] = info
-                commenters_by_week[_week_key(cdt)].add(user)
+                commenters_by_week[_week_key(cdt)][user] += 1
                 # First response = first comment by a human who is not the issue
                 # author, strictly after creation. Author self-comments and bot
                 # comments are not responses.
@@ -188,8 +185,11 @@ def fetch_issue_series(owner: str, repo: str, weeks: int, max_issues: int = 500)
                     if first_response_at is None or cdt < first_response_at:
                         first_response_at = cdt
             if first_response_at is not None:
+                # Attribute the response to the week it actually happened so a
+                # gap between "no maintainer present" shows as a missing value,
+                # not as a good week because the issue was created earlier.
                 first_response.append(
-                    (created_week, (first_response_at - created).total_seconds() / 3600.0)
+                    (_week_key(first_response_at), (first_response_at - created).total_seconds() / 3600.0)
                 )
 
     return {
@@ -318,21 +318,28 @@ def build_weekly_series(raw: Dict[str, Any], weeks: int) -> Dict[str, List[float
 
 
 def _safe_ratio(recent: float, baseline: float) -> Optional[float]:
+    """Zero-baseline aware ratio. baseline 0 with recent > 0 is itself an
+    inflection (a metric appearing from nothing), capped at 10x so sparse
+    repos don't produce absurd ratios. None only when both are zero."""
     if baseline <= 0:
+        if recent > 0:
+            return 10.0
         return None
-    return recent / baseline
+    return min(recent / baseline, 10.0)
 
 
 def detect_trends(series: Dict[str, List[float]], labels: List[str]) -> List[Dict[str, Any]]:
     """Changepoint/inflection detection: compare the last 2 weeks against the
     preceding baseline window, then locate the first deviating week."""
     config = {
-        "time_to_first_response_days": {"higher_is_worse": True, "threshold": 1.5, "display": "median time-to-first-response"},
+        "time_to_first_response_days": {"higher_is_worse": True, "threshold": 1.5, "display": "median time-to-first-response", "zero_is_missing": True},
         "backlog_size": {"higher_is_worse": True, "threshold": 1.3, "display": "backlog size"},
         "duplicate_rate": {"higher_is_worse": True, "threshold": 1.5, "display": "duplicate rate"},
         "incoming_volume": {"higher_is_worse": True, "threshold": 1.5, "display": "incoming issue volume"},
+        "issues_closed": {"higher_is_worse": False, "threshold": 0.67, "display": "issues closed per week"},
+        "new_contributors": {"higher_is_worse": False, "threshold": 0.67, "display": "new contributors"},
         "active_contributors": {"higher_is_worse": False, "threshold": 0.67, "display": "active contributors"},
-        "pr_merge_latency_days": {"higher_is_worse": True, "threshold": 1.5, "display": "PR merge latency"},
+        "pr_merge_latency_days": {"higher_is_worse": True, "threshold": 1.5, "display": "PR merge latency", "zero_is_missing": True},
         "close_open_ratio": {"higher_is_worse": False, "threshold": 0.67, "display": "issue close rate"},
     }
     trends = []
@@ -342,6 +349,13 @@ def detect_trends(series: Dict[str, List[float]], labels: List[str]) -> List[Dic
             continue
         baseline = values[-6:-2] or values[:-2]
         recent = values[-2:]
+        # For latency metrics a 0 means "no data that week" (missing), not an
+        # instant measurement — drop those weeks before comparing.
+        if cfg.get("zero_is_missing"):
+            baseline = [v for v in baseline if v > 0]
+            recent = [v for v in recent if v > 0]
+            if not baseline or not recent:
+                continue
         base_med = statistics.median(baseline) if baseline else 0.0
         rec_med = statistics.median(recent) if recent else 0.0
         ratio = _safe_ratio(rec_med, base_med)
@@ -357,6 +371,13 @@ def detect_trends(series: Dict[str, List[float]], labels: List[str]) -> List[Dic
             if wk_ratio is not None and (wk_ratio >= cfg["threshold"] if cfg["higher_is_worse"] else wk_ratio <= cfg["threshold"]):
                 change_week = labels[i]
                 break
+        from_zero = base_med <= 0 and rec_med > 0
+        evidence = [
+            f"{cfg['display']} changed {round(ratio, 1)}x vs the previous {len(baseline)} weeks "
+            f"({base_med} -> {rec_med}), inflection around {change_week or labels[-2]}"
+        ]
+        if from_zero:
+            evidence.append("the baseline window had zero activity — this metric materialized from nothing")
         trends.append(
             {
                 "metric": metric,
@@ -365,11 +386,9 @@ def detect_trends(series: Dict[str, List[float]], labels: List[str]) -> List[Dic
                 "baseline_value": round(base_med, 2),
                 "recent_value": round(rec_med, 2),
                 "change_ratio": round(ratio, 2),
+                "from_zero": from_zero,
                 "change_week": change_week or labels[-2],
-                "evidence": [
-                    f"{cfg['display']} changed {round(ratio, 1)}x vs the previous {len(baseline)} weeks "
-                    f"({base_med} -> {rec_med}), inflection around {change_week or labels[-2]}"
-                ],
+                "evidence": evidence,
             }
         )
     trends.sort(key=lambda t: t["change_ratio"], reverse=True)
@@ -440,6 +459,7 @@ def _has_key() -> bool:
 def build_llm() -> Optional[Any]:
     if not _has_key():
         return None
+    from langchain_nvidia_ai_endpoints import ChatNVIDIA
     return ChatNVIDIA(
         model=NVIDIA_LLM_MODEL,
         api_key=NVIDIA_API_KEY,
@@ -451,6 +471,7 @@ def build_llm() -> Optional[Any]:
 
 def build_embedder() -> Any:
     if _has_key():
+        from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
         return NVIDIAEmbeddings(model=NVIDIA_EMBED_MODEL, api_key=NVIDIA_API_KEY, truncate="END")
     return LocalEmbeddings()
 
@@ -496,6 +517,10 @@ def compute_health_score(trends: List[Dict[str, Any]]) -> Dict[str, Any]:
             score -= 5
         elif metric == "active_contributors":
             score -= 15 if ratio <= 0.67 else 8
+        elif metric == "pr_merge_latency_days":
+            score -= 15 if ratio >= 3 else 8
+        elif metric == "close_open_ratio":
+            score -= 15 if ratio <= 0.5 else 8
     score = max(0, min(100, round(score)))
     status = "Healthy" if score >= 80 else "Watch" if score >= 60 else "Declining"
     return {"health_score": score, "health_status": status}
@@ -572,18 +597,25 @@ def node_drill_down(state: AgentState) -> AgentState:
 
 
 def _contributor_matrix(raw: Dict[str, Any], labels: List[str]) -> List[Dict[str, Any]]:
-    """Week x contributor activity matrix (1 = commented that week) for the
-    heatmap. Top contributors by comment count, capped for readability."""
+    """Week x contributor activity matrix for the heatmap. Cell value = number
+    of comments that user made that week (0 = inactive), so the UI can bucket
+    intensity instead of showing a binary active/inactive dot. Top contributors
+    by comment count, capped for readability. Tolerates legacy set-based
+    commenters_by_week fixtures."""
     by_week = raw.get("commenters_by_week", {})
     commenters = raw.get("commenters", {})
     users = sorted(commenters.keys(), key=lambda u: -commenters[u]["count"])[:10]
-    return [
-        {
-            "login": user,
-            "weeks": [1 if user in by_week.get(label, set()) else 0 for label in labels],
-        }
-        for user in users
-    ]
+    matrix = []
+    for user in users:
+        weeks = []
+        for label in labels:
+            week = by_week.get(label, {})
+            if hasattr(week, "get"):
+                weeks.append(int(week.get(user, 0)))
+            else:
+                weeks.append(1 if user in week else 0)
+        matrix.append({"login": user, "weeks": weeks})
+    return matrix
 
 
 def _contributor_activity(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -620,28 +652,38 @@ def _metric_phrase(trend: Dict[str, Any]) -> str:
     return f"{trend['display']} changed from {base} → {recent} (x{ratio})"
 
 
+def _base_result(state: AgentState) -> Dict[str, Any]:
+    """Shared payload fields every result carries, whatever synthesis path ran:
+    series, labels, contributor data, releases and commit participation."""
+    return {
+        "health_score": state.get("health_score", 100),
+        "health_status": state.get("health_status", "Healthy"),
+        "trends": state.get("trends", []),
+        "series": state.get("series", {}),
+        "week_labels": state.get("week_labels", []),
+        "contributor_activity": _contributor_activity(state.get("raw", {})),
+        "contributor_matrix": _contributor_matrix(state.get("raw", {}), state.get("week_labels", [])),
+        "releases": state.get("releases", []),
+        "commit_participation": (state.get("raw", {}) or {}).get("commit_participation", []),
+    }
+
+
 def _heuristic_synthesize(state: AgentState) -> Dict[str, Any]:
     """Deterministic narrative: real numbers from the series, cause attribution
     (capacity vs demand), and a concrete recommendation. Runs even when the LLM
     is unavailable so the Weekly Brief narrative is never generic."""
     trends = state["trends"]
     series = state["series"]
-    labels = state["week_labels"]
     contrib_rows = _contributor_activity(state.get("raw", {}))
+    base = _base_result(state)
 
     if not trends:
         return {
+            **base,
             "health_summary": "All tracked metrics are within baseline. No intervention needed this week.",
-            "health_score": state.get("health_score", 100),
-            "health_status": state.get("health_status", "Healthy"),
-            "trends": [],
             "causes": [],
             "recommendation": "No action required; include a one-line 'healthy' status in the Weekly Brief.",
             "feeds_weekly_brief": True,
-            "series": series,
-            "week_labels": labels,
-"contributor_activity": contrib_rows,
-            "contributor_matrix": _contributor_matrix(state.get("raw", {}), state["week_labels"]),
         }
 
     worst = trends[0]
@@ -705,17 +747,11 @@ def _heuristic_synthesize(state: AgentState) -> Dict[str, Any]:
         recommendation += " Consider temporarily raising the auto-handle threshold to reduce load on the remaining maintainers."
 
     return {
+        **base,
         "health_summary": f"{_metric_phrase(worst)}, {driver}.",
-        "health_score": state.get("health_score", 100),
-        "health_status": state.get("health_status", "Healthy"),
-        "trends": trends,
         "causes": causes,
         "recommendation": recommendation,
         "feeds_weekly_brief": True,
-        "series": series,
-        "week_labels": labels,
-"contributor_activity": contrib_rows,
-        "contributor_matrix": _contributor_matrix(state.get("raw", {}), state["week_labels"]),
     }
 
 
@@ -744,16 +780,12 @@ def node_synthesize(state: AgentState) -> AgentState:
         '"feeds_weekly_brief": true}'
     )
     try:
+        from langchain_core.messages import HumanMessage
         raw = llm.invoke([HumanMessage(content=prompt)]).content.strip()
         raw = re.sub(r"^```(?:json)?|```$", "", raw).strip()
         parsed = json.loads(raw)
+        parsed.update(_base_result(state))
         parsed["trends"] = state["trends"]
-        parsed["series"] = state["series"]
-        parsed["week_labels"] = state["week_labels"]
-        parsed["contributor_activity"] = baseline["contributor_activity"]
-        parsed["contributor_matrix"] = baseline["contributor_matrix"]
-        parsed["health_score"] = baseline["health_score"]
-        parsed["health_status"] = baseline["health_status"]
         return {**state, "status": "complete", "result": {"status": "complete", **parsed}}
     except Exception as exc:
         fallback = _heuristic_synthesize(state)
@@ -761,7 +793,9 @@ def node_synthesize(state: AgentState) -> AgentState:
 
 
 def node_finalize(state: AgentState) -> AgentState:
-    return state
+    # Guarantee the structured payload is complete whatever path synthesized.
+    result = {**_base_result(state), **state.get("result", {})}
+    return {**state, "result": result}
 
 
 # ---------------------------------------------------------------------------
@@ -769,6 +803,8 @@ def node_finalize(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def build_graph(owner: str, repo: str, weeks: int, llm: Any, embedder: Any) -> Any:
+    from langgraph.graph import END, START, StateGraph
+
     def _make_state() -> AgentState:
         return {
             "owner": owner,
