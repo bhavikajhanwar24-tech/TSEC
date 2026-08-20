@@ -3,3 +3,4 @@ langchain-core
 langchain-nvidia-ai-endpoints
 numpy
 python-dotenv
+requests
