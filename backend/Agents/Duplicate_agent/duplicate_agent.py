@@ -677,11 +677,15 @@ def main() -> int:
         return 1
 
     if args.issue_json:
-        if not os.path.exists(args.issue_json):
+        if args.issue_json == "-":
+            issue_payload = json.load(sys.stdin)
+        elif not os.path.exists(args.issue_json):
             print(f"error: issue file not found: {args.issue_json}", file=sys.stderr)
             return 1
-        with open(args.issue_json, encoding="utf-8") as fh:
-            issue = json.load(fh)
+        else:
+            with open(args.issue_json, encoding="utf-8") as fh:
+                issue_payload = json.load(fh)
+        issue = issue_payload
         if "number" not in issue:
             print("error: --issue-json payload must contain an 'issue' object", file=sys.stderr)
             return 1
