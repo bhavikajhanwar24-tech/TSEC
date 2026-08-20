@@ -40,7 +40,6 @@ router.get("/repos", async (req, res) => {
     while (true) {
       const params = new URLSearchParams({
         visibility: "all",
-        type: "all",
         affiliation: "owner,collaborator,organization_member",
         per_page: "100",
         page: String(page),
@@ -52,7 +51,9 @@ router.get("/repos", async (req, res) => {
       );
 
       if (!response.ok) {
-        return res.status(response.status).json({ error: "GitHub API error" });
+        const error = await response.json().catch(() => ({}));
+        console.error("GitHub repositories error:", error);
+        return res.status(response.status).json({ error: error.message || "GitHub API error" });
       }
 
       const data = await response.json();
