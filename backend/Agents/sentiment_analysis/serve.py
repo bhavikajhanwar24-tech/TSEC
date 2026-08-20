@@ -28,6 +28,11 @@ from agent import create_sentiment_graph
 
 load_dotenv()
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BACKEND_DIR = os.path.dirname(os.path.dirname(BASE_DIR))
+load_dotenv(os.path.join(BACKEND_DIR, ".env"))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
 API = "https://api.github.com"
 MAINTAINER_ASSOCIATIONS = {"OWNER", "COLLABORATOR", "MEMBER"}
 

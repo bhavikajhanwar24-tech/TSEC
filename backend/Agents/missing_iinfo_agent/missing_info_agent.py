@@ -198,7 +198,10 @@ def build_graph() -> Any:
 
 
 def main() -> None:
-    load_dotenv()
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    BACKEND_DIR = os.path.dirname(os.path.dirname(BASE_DIR))
+    load_dotenv(os.path.join(BACKEND_DIR, ".env"))   # shared backend credentials
+    load_dotenv(os.path.join(BASE_DIR, ".env"))      # optional local overrides
     parser = argparse.ArgumentParser(description="Draft targeted GitHub missing-info requests")
     parser.add_argument("--repo", required=True, help="Repository in owner/name format")
     parser.add_argument("--issue", required=True, type=int, help="GitHub issue number")

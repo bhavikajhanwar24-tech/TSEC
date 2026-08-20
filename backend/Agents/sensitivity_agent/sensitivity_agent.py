@@ -45,7 +45,9 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langgraph.graph import END, START, StateGraph
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+BACKEND_DIR = os.path.dirname(os.path.dirname(BASE_DIR))
+load_dotenv(os.path.join(BACKEND_DIR, ".env"))   # shared backend credentials
+load_dotenv(os.path.join(BASE_DIR, ".env"))      # optional local overrides
 
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 NVIDIA_LLM_MODEL = os.getenv("NVIDIA_LLM_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")

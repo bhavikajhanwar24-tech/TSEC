@@ -6,8 +6,11 @@ from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (shared backend .env, then optional local .env)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BACKEND_DIR = os.path.dirname(os.path.dirname(BASE_DIR))
+load_dotenv(os.path.join(BACKEND_DIR, ".env"))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 # Define the structured output model for the LLM
 class IssueAnalysis(BaseModel):
