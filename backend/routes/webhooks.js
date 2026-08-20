@@ -15,6 +15,7 @@ const agentDirs = {
   health: path.join(__dirname, "..", "Agents", "Health_agent"),
 };
 const analyses = new Map();
+let lastWebhook = null;
 
 function analysisKey(owner, repo, number) {
   return `${owner}/${repo}#${number}`;
@@ -154,9 +155,14 @@ function validSignature(req) {
 }
 
 router.post("/github", async (req, res) => {
-  if (!validSignature(req)) return res.status(401).json({ error: "Invalid webhook signature" });
+  const event = req.get("x-github-event") || "unknown";
+  lastWebhook = { event, action: req.body?.action || "unknown", receivedAt: new Date().toISOString() };
+  if (!validSignature(req)) {
+    lastWebhook.rejected = "invalid_signature_or_missing_secret";
+    console.error("GitHub webhook rejected: invalid signature or missing GITHUB_WEBHOOK_SECRET");
+    return res.status(401).json({ error: "Invalid webhook signature" });
+  }
 
-  const event = req.get("x-github-event");
   const issueEvent = event === "issues" && ["opened", "edited", "reopened"].includes(req.body.action);
   const reporterReply = event === "issue_comment" && req.body.action === "created";
   if (!issueEvent && !reporterReply) {
@@ -171,6 +177,7 @@ router.post("/github", async (req, res) => {
 
   if (!process.env.GITHUB_TOKEN) {
     console.error("Duplicate webhook skipped: GITHUB_TOKEN is not configured");
+    lastWebhook.rejected = "missing_github_token";
     return res.status(503).json({ error: "GITHUB_TOKEN is not configured for automatic agents" });
   }
 
@@ -179,7 +186,20 @@ router.post("/github", async (req, res) => {
   const isResume = reporterReply || req.body.action === "edited";
   if (isResume && existing?.status === "stopped_duplicate") return res.status(202).json({ accepted: true, processed: false, issue: issue.number });
   const record = await createAnalysis(issue, repository, process.env.GITHUB_TOKEN);
+  lastWebhook.processed = true;
+  lastWebhook.issue = issue.number;
   res.status(202).json({ accepted: true, processed: true, issue: issue.number });
+});
+
+router.get("/status", (req, res) => {
+  res.json({
+    webhookEndpoint: "/api/webhooks/github",
+    configured: {
+      webhookSecret: Boolean(process.env.GITHUB_WEBHOOK_SECRET),
+      agentToken: Boolean(process.env.GITHUB_TOKEN),
+    },
+    lastWebhook,
+  });
 });
 
 router.get("/analysis/:owner/:repo", async (req, res) => {
