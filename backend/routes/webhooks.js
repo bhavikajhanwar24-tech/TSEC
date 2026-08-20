@@ -147,7 +147,7 @@ async function createAnalysis(issue, repository, token) {
 }
 
 function validSignature(req) {
-  const secret = process.env.GITHUB_WEBHOOK_SECRET;
+  const secret = (process.env.GITHUB_WEBHOOK_SECRET || process.env.GITHUB_APP_WEBHOOK_SECRET || "").trim();
   const signature = req.get("x-hub-signature-256");
   if (!secret || !signature || !req.rawBody) return false;
   const expected = `sha256=${crypto.createHmac("sha256", secret).update(req.rawBody).digest("hex")}`;
@@ -200,7 +200,7 @@ router.get("/status", (req, res) => {
   res.json({
     webhookEndpoints: ["/api/webhooks/github", "/api/webhooks"],
     configured: {
-      webhookSecret: Boolean(process.env.GITHUB_WEBHOOK_SECRET),
+      webhookSecret: Boolean((process.env.GITHUB_WEBHOOK_SECRET || process.env.GITHUB_APP_WEBHOOK_SECRET || "").trim()),
       agentToken: Boolean(process.env.GITHUB_TOKEN),
     },
     lastWebhook,
