@@ -12,6 +12,10 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const isHttps = process.env.NODE_ENV === "production" || process.env.FRONTEND_URL?.startsWith("https://");
+const configuredOrigins = (process.env.FRONTEND_URL || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 app.set("trust proxy", 1);
 app.use(express.json({
@@ -23,15 +27,14 @@ app.use(express.json({
 app.use(
   cors({
     origin(origin, cb) {
-      const allowed = process.env.FRONTEND_URL;
-      if (!origin || !allowed || origin === allowed || origin.startsWith("http://localhost")) {
-        return cb(null, true);
-      }
-      cb(new Error("CORS: origin not allowed"));
+      const isLocalhost = !origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+      const isConfigured = configuredOrigins.includes(origin);
+      cb(null, isLocalhost || isConfigured ? origin || true : false);
     },
     credentials: true,
   })
 );
+app.options(/.*/, cors());
 
 // Persistent sessions in Postgres when DATABASE_URL is configured, so logins
 // survive server restarts and redeploys. Falls back to in-memory otherwise.
