@@ -283,3 +283,14 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
   .detail-page > .stats { padding: 0 18px 18px; }
   .detail-page > .back-button { padding: 15px 18px; }
 }
+
+.health-trend-detail { margin-top: 4px; }
+.health-chart-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-bottom: 18px; }
+.health-chart-card { background: var(--surface-soft); border: 1px solid var(--line); border-radius: 10px; padding: 12px 12px 10px; }
+.health-chart-heading { align-items: baseline; display: flex; gap: 10px; justify-content: space-between; margin-bottom: 6px; }
+.health-chart-heading strong { font-size: 12px; }
+.health-chart-heading span { color: var(--muted); font-family: 'Space Grotesk', sans-serif; font-size: 12px; }
+.health-chart { display: block; height: auto; width: 100%; }
+.health-chart-labels { color: var(--muted); display: flex; font-size: 10px; justify-content: space-between; margin-top: 3px; }
+.health-narrative { font-size: 15px; line-height: 1.55; }
+.evidence-mark.inactive { color: var(--warning); }

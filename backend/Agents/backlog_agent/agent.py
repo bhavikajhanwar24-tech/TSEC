@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, TypedDict, Literal
 from dotenv import load_dotenv
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
@@ -158,29 +159,20 @@ def run_heuristic_analysis(issue: Dict[str, Any], repo_norms: Dict[str, Any]) ->
         "suggested_comment": suggested_comment
     }
 
-def analyze_issue_node(state: AgentState) -> Dict[str, Any]:
-    """Node that evaluates the current issue using ChatNVIDIA or Heuristic fallback."""
-    issues = state["issues"]
-    idx = state["current_index"]
-    repo_norms = state["repo_norms"]
-    
-    if idx >= len(issues):
-        return {}
-        
-    issue = issues[idx]
-    comments = issue.get("comments", [])
+def _comment_history_text(issue: Dict[str, Any]) -> str:
     comment_history_str = ""
-    for c in comments:
+    for c in issue.get("comments", []):
         comment_history_str += f"- Author: {c.get('author', 'unknown')} ({c.get('created_at', 'unknown')})\n  Body: {c.get('body', '')}\n\n"
-        
-    if not comment_history_str:
-        comment_history_str = "(No comments on this issue yet)"
+    return comment_history_str or "(No comments on this issue yet)"
 
-    # Retrieve similar past issues from the shared project memory so the
-    # analysis can reference how comparable stale issues were handled.
-    memory_context = state.get("memory_context", "")
-    owner = state.get("owner", "")
-    repo = state.get("repo", "")
+
+def _analyze_one(issue: Dict[str, Any], repo_norms: Dict[str, Any], memory_context: str = "", owner: str = "", repo: str = "") -> Dict[str, Any]:
+    """Analyze a single issue: NVIDIA structured output when configured, else
+    the deterministic heuristic. This is the unit of work for the parallel
+    sweep — it never raises."""
+    issue_number = issue.get("number")
+    comment_history_str = _comment_history_text(issue)
+
     if not memory_context and owner and repo:
         try:
             embedder = memory_store.build_embedder()
@@ -194,35 +186,34 @@ def analyze_issue_node(state: AgentState) -> Dict[str, Any]:
             ) or "(no similar issues in memory yet)"
         except Exception:
             memory_context = "(memory unavailable)"
-        
+
     api_key = os.getenv("NVIDIA_API_KEY")
     is_mock = not api_key or api_key == "your_nvidia_api_key_here"
-    
+
     analysis = None
     if not is_mock:
         try:
             model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
-            print(f"[INFO] Analyzing Issue #{issue.get('number')} using NVIDIA Model: {model_name}...")
             llm = ChatNVIDIA(
                 model=model_name,
                 api_key=api_key,
                 temperature=0.1,
-                max_completion_tokens=4096
+                max_completion_tokens=800,
             )
             structured_llm = llm.with_structured_output(IssueAnalysis)
-            
+
             prompt = prompt_template.format(
                 median_response_days=repo_norms["median_response_time_days"],
                 auto_close_policy=repo_norms["contributing_guidelines"],
                 general_conventions=repo_norms["general_conventions"],
-                issue_number=issue.get("number"),
+                issue_number=issue_number,
                 issue_title=issue.get("title"),
                 last_activity_days=issue.get("last_activity_days"),
                 issue_description=issue.get("description", "(No description)"),
                 comment_history=comment_history_str,
-                memory_context=memory_context
+                memory_context=memory_context,
             )
-            
+
             analysis_pydantic = structured_llm.invoke(prompt)
             analysis = {
                 "issue_number": analysis_pydantic.issue_number,
@@ -230,50 +221,74 @@ def analyze_issue_node(state: AgentState) -> Dict[str, Any]:
                 "blocked_by": analysis_pydantic.blocked_by,
                 "action_recommendation": analysis_pydantic.action_recommendation,
                 "reasoning": analysis_pydantic.reasoning,
-                "suggested_comment": analysis_pydantic.suggested_comment
+                "suggested_comment": analysis_pydantic.suggested_comment,
             }
-        except Exception as e:
-            print(f"[WARNING] NVIDIA LLM analysis failed: {e}. Falling back to Heuristic analysis.")
+        except Exception:
             is_mock = True
-            
+
     if is_mock:
-        print(f"[INFO] Analyzing Issue #{issue.get('number')} using heuristic analysis rules...")
         analysis = run_heuristic_analysis(issue, repo_norms)
 
-    # Remember this issue and its classification in the shared project memory
-    # so future sweeps can reference comparable cases. Never blocks.
+    return analysis
+
+
+def analyze_issue_node(state: AgentState) -> Dict[str, Any]:
+    """Node that evaluates ALL issues in parallel (LLM calls are I/O-bound) and
+    returns every analysis at once. Bounded: serve.py already caps the issue
+    list to the stalest subset, so a full sweep completes in seconds instead of
+    minutes of sequential LLM calls."""
+    issues = state["issues"]
+    if not issues:
+        return {"analysis_results": [], "current_index": 0}
+
+    memory_context = state.get("memory_context", "")
+    owner = state.get("owner", "")
+    repo = state.get("repo", "")
+
+    results: List[Dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [
+            pool.submit(_analyze_one, issue, state["repo_norms"], memory_context, owner, repo)
+            for issue in issues
+        ]
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    # stable order for the report
+    results.sort(key=lambda r: r.get("issue_number", 0))
+
+    # Persist into the shared project memory sequentially (Chroma is not
+    # thread-safe for concurrent writes). Never blocks the pipeline.
     if owner and repo:
         try:
             embedder = memory_store.build_embedder()
-            issue_text = f"{issue.get('title', '')}\n{issue.get('description', '')}\n{comment_history_str}"
-            memory_store.ingest(
-                owner,
-                repo,
-                [
-                    {
-                        "id": f"issue-{issue.get('number', '')}",
-                        "text": issue_text,
-                        "embedding": embedder.embed_query(issue_text),
-                        "metadata": {
-                            "kind": "issue",
-                            "number": issue.get("number", 0),
-                            "state": "open",
-                            "blocked_by": analysis.get("blocked_by", "none"),
-                            "action_recommendation": analysis.get("action_recommendation", "keep_open"),
-                            "last_activity_days": issue.get("last_activity_days", 0),
-                        },
-                    }
-                ],
-            )
+            for issue, analysis in zip(issues, results):
+                issue_text = f"{issue.get('title', '')}\n{issue.get('description', '')}\n{_comment_history_text(issue)}"
+                memory_store.ingest(
+                    owner,
+                    repo,
+                    [
+                        {
+                            "id": f"issue-{issue.get('number', '')}",
+                            "text": issue_text,
+                            "embedding": embedder.embed_query(issue_text),
+                            "metadata": {
+                                "kind": "issue",
+                                "number": issue.get("number", 0),
+                                "state": "open",
+                                "blocked_by": analysis.get("blocked_by", "none"),
+                                "action_recommendation": analysis.get("action_recommendation", "keep_open"),
+                                "last_activity_days": issue.get("last_activity_days", 0),
+                            },
+                        }
+                    ],
+                )
         except Exception:
             pass
 
-    new_results = list(state.get("analysis_results", []))
-    new_results.append(analysis)
-    
     return {
-        "analysis_results": new_results,
-        "current_index": idx + 1,
+        "analysis_results": results,
+        "current_index": len(issues),
         "memory_context": memory_context,
     }
 

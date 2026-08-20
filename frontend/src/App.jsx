@@ -388,7 +388,7 @@ const automaticAgents = [
     "Backlog context",
     "Places the issue in repository-wide work context.",
   ],
-  ["health", "Repository health", "Summarizes current project health signals."],
+  ["health", "Repository health", "Tracks response times, backlog, contributors, and trends."],
 ];
 
 function statusLabel(status) {
@@ -438,6 +438,127 @@ function resultEvidence(result = {}) {
   );
 }
 
+function TrendChart({ title, labels, values, color, format }) {
+  const w = 280;
+  const h = 88;
+  const pad = 8;
+  const safe = values.map((v) => Number(v) || 0);
+  const max = Math.max(...safe, 1);
+  const step = (w - 2 * pad) / Math.max(1, safe.length - 1);
+  const pts = safe.map((v, i) => [
+    pad + i * step,
+    h - pad - (v / max) * (h - 2 * pad),
+  ]);
+  const line = pts
+    .map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(" ");
+  const last = pts[pts.length - 1];
+  const area = `${line} L${last[0].toFixed(1)},${h - pad} L${pts[0][0].toFixed(1)},${h - pad} Z`;
+  return (
+    <div className="health-chart-card">
+      <div className="health-chart-heading">
+        <strong>{title}</strong>
+        <span>{format ? format(safe[safe.length - 1]) : safe[safe.length - 1]}</span>
+      </div>
+      <svg
+        viewBox={`0 0 ${w} ${h}`}
+        className="health-chart"
+        role="img"
+        aria-label={`${title} trend over ${labels.length} weeks`}
+      >
+        <path d={area} fill={color} opacity="0.14" />
+        <path
+          d={line}
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        {pts.map(([x, y], i) => (
+          <circle key={i} cx={x.toFixed(1)} cy={y.toFixed(1)} r="2.4" fill={color}>
+            <title>{`${labels[i]}: ${format ? format(safe[i]) : safe[i]}`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div className="health-chart-labels">
+        <span>{labels[0]}</span>
+        <span>{labels[labels.length - 1]}</span>
+      </div>
+    </div>
+  );
+}
+
+function HealthTrendDetail({ result }) {
+  const series = result.series || {};
+  const labels = result.week_labels || [];
+  const contributors = result.contributor_activity || [];
+  const charts = [
+    {
+      key: "time_to_first_response_days",
+      title: "Median time-to-first-response",
+      color: "#e5484d",
+      format: (v) => `${v} days`,
+    },
+    {
+      key: "backlog_size",
+      title: "Open backlog",
+      color: "#8e4ec6",
+      format: (v) => `${v} issues`,
+    },
+    {
+      key: "incoming_volume",
+      title: "Incoming issues / week",
+      color: "#2f9e6e",
+      format: (v) => `${v}`,
+    },
+    {
+      key: "active_contributors",
+      title: "Active contributors / week",
+      color: "#3b82f6",
+      format: (v) => `${v}`,
+    },
+  ].filter((c) => Array.isArray(series[c.key]) && series[c.key].length > 1);
+  return (
+    <div className="health-trend-detail">
+      {charts.length > 0 && (
+        <div className="health-chart-grid">
+          {charts.map((c) => (
+            <TrendChart
+              key={c.key}
+              title={c.title}
+              labels={labels}
+              values={series[c.key]}
+              color={c.color}
+              format={c.format}
+            />
+          ))}
+        </div>
+      )}
+      {contributors.length > 0 && (
+        <div className="result-list">
+          <strong>Contributor activity</strong>
+          {contributors.slice(0, 8).map((contributor) => (
+            <div className="evidence-row" key={contributor.login}>
+              <span
+                className={`evidence-mark ${contributor.inactive ? "inactive" : ""}`}
+              >
+                {contributor.inactive ? "◌" : "✓"}
+              </span>
+              <span>
+                @{contributor.login} · {contributor.comments} comments ·{" "}
+                {contributor.inactive
+                  ? `inactive ~${contributor.last_active_days_ago} days`
+                  : `active ${contributor.last_active_days_ago} days ago`}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AgentResultDetail({ agent }) {
   const result = agent.result || {};
   const evidence = resultEvidence(result);
@@ -461,6 +582,15 @@ function AgentResultDetail({ agent }) {
       {recommendation && (
         <p className="result-recommendation">{recommendation}</p>
       )}
+      {agent.key === "health" && result.health_summary && (
+        <p className="result-recommendation health-narrative">
+          {result.health_summary}
+        </p>
+      )}
+      {agent.key === "health" &&
+        (result.series || result.contributor_activity) && (
+          <HealthTrendDetail result={result} />
+        )}
       {matches.length > 0 && (
         <div className="result-list">
           <strong>Related issues</strong>
