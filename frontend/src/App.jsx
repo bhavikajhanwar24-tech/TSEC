@@ -13,6 +13,28 @@ const tabs = [
   "Code changes",
 ];
 
+async function parseJsonIfPossible(response) {
+  const contentType = response.headers.get("content-type") || "";
+  const rawText = await response.text();
+
+  if (!rawText) return null;
+
+  const trimmed = rawText.trim();
+  if (
+    !contentType.includes("application/json") &&
+    !trimmed.startsWith("{") &&
+    !trimmed.startsWith("[")
+  ) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
 async function api(path, options = {}) {
   const url = `${API_BASE}${path}`;
   const response = await fetch(url, {
@@ -21,13 +43,17 @@ async function api(path, options = {}) {
     body: options.body ? JSON.stringify(options.body) : undefined,
     credentials: "include",
   });
+
+  const body = await parseJsonIfPossible(response);
+
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(
-      body.error || `Request failed (${response.status}) at ${url}`,
-    );
+    const errorMessage =
+      (body && typeof body === "object" && (body.error || body.message)) ||
+      `Request failed (${response.status}) at ${url}`;
+    throw new Error(errorMessage);
   }
-  return response.json();
+
+  return body ?? {};
 }
 
 function formatDate(value) {
