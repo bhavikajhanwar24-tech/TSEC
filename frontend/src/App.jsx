@@ -1884,6 +1884,10 @@ function App() {
               />
             </label>
           </div>
+          <div className="dashboard-chat-hint">
+            <strong>Repository chatbot</strong>
+            <span>Open any repository to ask questions about its issues, pull requests, fixes, and history.</span>
+          </div>
           {error && <p className="error-banner">{error}</p>}
           <section className="repo-grid">
             {filteredRepos.map((repo) => (

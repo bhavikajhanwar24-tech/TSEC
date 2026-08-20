@@ -182,12 +182,24 @@ router.post("/repos/:owner/:repo/chat", async (req, res) => {
       console.error("Repository chat database retrieval failed:", error.message);
       return [];
     });
-    const [storedIssues, githubIssues] = await Promise.all([
+    const headers = githubHeaders(req.session.githubToken);
+    const [storedIssues, repository, githubIssues, githubCommits, githubContributors] = await Promise.all([
       storedIssuesPromise,
-      fetchOptionalList(`${GITHUB_API}/repos/${owner}/${repo}/issues?state=all&per_page=80`, githubHeaders(req.session.githubToken)),
+      fetch(`${GITHUB_API}/repos/${owner}/${repo}`, { headers })
+        .then((response) => response.ok ? response.json() : null)
+        .catch(() => null),
+      fetchOptionalList(`${GITHUB_API}/repos/${owner}/${repo}/issues?state=all&per_page=80`, headers),
+      fetchOptionalList(`${GITHUB_API}/repos/${owner}/${repo}/commits?per_page=50`, headers),
+      fetchOptionalList(`${GITHUB_API}/repos/${owner}/${repo}/contributors?per_page=50`, headers),
     ]);
 
     const documents = [];
+    if (repository) {
+      documents.push({
+        source: "Repository overview",
+        text: `Repository ${repository.full_name}: ${repository.description || "No description"}\nLanguage: ${repository.language || "Not specified"}\nDefault branch: ${repository.default_branch}\nVisibility: ${repository.private ? "private" : "public"}\nStars: ${repository.stargazers_count || 0}\nForks: ${repository.forks_count || 0}\nOpen issues: ${repository.open_issues_count || 0}\nCreated: ${repository.created_at}\nUpdated: ${repository.updated_at}\nLicense: ${repository.license?.name || "Not specified"}`,
+      });
+    }
     storedIssues.forEach((issue) => {
       const issueJson = issue.toJSON();
       const kind = issueJson.isPullRequest ? "PR" : "Issue";
@@ -200,6 +212,18 @@ router.post("/repos/:owner/:repo/chat", async (req, res) => {
       documents.push({
         source: `${item.pull_request ? "PR" : "Issue"} #${item.number}`,
         text: `${item.pull_request ? "PR" : "Issue"} #${item.number}: ${item.title}\n${item.body || ""}\nState: ${item.state}\nAuthor: ${item.user?.login || "unknown"}\nCreated: ${item.created_at || ""}\nUpdated: ${item.updated_at || ""}`,
+      });
+    });
+    githubCommits.forEach((commit) => {
+      documents.push({
+        source: `Commit ${commit.sha?.slice(0, 7) || "unknown"}`,
+        text: `Commit ${commit.sha || ""}: ${commit.commit?.message || ""}\nAuthor: ${commit.author?.login || commit.commit?.author?.name || "unknown"}\nDate: ${commit.commit?.author?.date || ""}\nURL: ${commit.html_url || ""}`,
+      });
+    });
+    githubContributors.forEach((contributor) => {
+      documents.push({
+        source: `Contributor ${contributor.login || "unknown"}`,
+        text: `Contributor: ${contributor.login || "unknown"}\nContributions: ${contributor.contributions || 0}\nProfile: ${contributor.html_url || ""}`,
       });
     });
 
