@@ -1,44 +1,48 @@
+const path = require("path");
 const express = require("express");
-const bodyParser = require("body-parser");
-const crypto = require("crypto");
+const session = require("express-session");
+const cors = require("cors");
+const dotenv = require("dotenv");
+const authRoutes = require("./routes/auth");
+const apiRoutes = require("./routes/api");
+
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const isProd = process.env.NODE_ENV === "production";
 
-// Middleware to parse JSON
-app.use(bodyParser.json());
+app.use(express.json());
 
-// Home route
-app.get("/", (req, res) => {
-  res.send("Hello from RepoGuardian SaaS!");
-});
+app.use(
+  cors({
+    origin(origin, cb) {
+      const allowed = process.env.FRONTEND_URL;
+      if (!origin || !allowed || origin === allowed || origin.startsWith("http://localhost")) {
+        return cb(null, true);
+      }
+      cb(new Error("CORS: origin not allowed"));
+    },
+    credentials: true,
+  })
+);
 
-// OAuth callback placeholder
-app.get("/auth/callback", (req, res) => {
-  res.send("OAuth callback reached!");
-});
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "dev-secret-change-me",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: isProd ? "none" : "lax",
+      secure: isProd,
+    },
+  })
+);
 
-// Webhook route
-app.post("/webhook", (req, res) => {
-  const event = req.headers["x-github-event"];
-  const signature = req.headers["x-hub-signature-256"];
-  const secret = process.env.GITHUB_WEBHOOK_SECRET;
-
-  // Verify signature if secret is set
-  if (secret && signature) {
-    const hmac = crypto.createHmac("sha256", secret);
-    const digest = "sha256=" + hmac.update(JSON.stringify(req.body)).digest("hex");
-
-    if (digest !== signature) {
-      return res.status(401).send("Invalid signature");
-    }
-  }
-
-  console.log(`Received event: ${event}`);
-  console.log(req.body);
-
-  res.status(200).send("Webhook received");
-});
+app.use("/auth", authRoutes);
+app.use("/api", apiRoutes);
+app.use(express.static(path.join(__dirname, "public")));
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
