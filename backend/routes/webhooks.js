@@ -123,8 +123,8 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
   const repo = repository.name;
   const env = { GITHUB_TOKEN: token };
   const steps = [
-    ["duplicate", agentDirs.duplicate, "duplicate_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue],
     ["missingInfo", agentDirs.missingInfo, "missing_info_agent.py", ["--repo", `${owner}/${repo}`, "--issue", String(issue.number)], undefined],
+    ["duplicate", agentDirs.duplicate, "duplicate_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue],
     ["sensitivity", agentDirs.sensitivity, "sensitivity_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue],
     ["sentiment", agentDirs.sentiment, "serve.py", [], { owner, repo, issueNumber: issue.number, repo_norms: {} }],
     ["backlog", agentDirs.backlog, "serve.py", [], { owner, repo, repo_norms: {} }, 240000],
@@ -140,7 +140,7 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     return { name, result: await startAgent(name, dir, script, args, payload, env, record, step, timeoutMs) };
   }
 
-  for (const stepDefinition of steps.slice(0, 3)) {
+  for (const stepDefinition of steps.slice(0, 2)) {
     const stepResult = await runStep(stepDefinition);
     if (!stepResult) continue;
     const { name, result } = stepResult;
@@ -176,6 +176,22 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     }
     if (name === "duplicate" && needsDuplicateEvidence(result)) {
       record.forceMissingInfo = true;
+      const missingStep = await runStep(steps[0]);
+      const missingResult = missingStep?.result || {};
+      if (missingResult.draft_comment) {
+        await githubIssueAction(owner, repo, issue.number, token, "POST", { body: missingResult.draft_comment });
+      } else {
+        const gaps = missingResult.missing_details?.length
+          ? missingResult.missing_details
+          : ["more reproduction steps, logs, or environment details to compare with the possible duplicate"];
+        await githubIssueAction(owner, repo, issue.number, token, "POST", {
+          body: `I need a little more detail before deciding whether this is a duplicate.\n\n${gaps.map((gap, index) => `${index + 1}. ${gap}`).join("\n")}\n\nPlease reply here with the missing details. I will re-check the duplicate comparison after your reply.`,
+        });
+      }
+      record.status = "waiting_duplicate_info";
+      record.stopReason = "More evidence is needed before confirming whether this is a duplicate.";
+      await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
+      return;
     }
     if (name === "missingInfo" && result.missing_fields?.length) {
       if (result.draft_comment) await githubIssueAction(owner, repo, issue.number, token, "POST", { body: result.draft_comment });
@@ -201,7 +217,7 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     }
   }
 
-  const remaining = steps.slice(3).filter(([name]) => !record.agents[name] || record.agents[name].status !== "complete");
+  const remaining = steps.slice(2).filter(([name]) => !record.agents[name] || record.agents[name].status !== "complete");
   await Promise.all(remaining.map((stepDefinition) => runStep(stepDefinition)));
   record.status = "complete";
   record.completedAt = new Date().toISOString();
