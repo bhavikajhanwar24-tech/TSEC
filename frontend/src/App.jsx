@@ -2317,17 +2317,8 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
     };
   }, [owner, repo, issue.number, notTriggered, onClose]);
 
-  const routedNames = new Set(
-    (analysis?.planner?.routing?.agents || []).map((name) =>
-      name === "missing_info" ? "missingInfo" : name,
-    ),
-  );
-  const plannerRouted = (analysis?.planner?.routing?.agents || []).length > 0;
   const agents = automaticAgents.map(([key, label, hint]) => {
-    const status =
-      plannerRouted && !routedNames.has(key)
-        ? "skipped"
-        : analysis?.agents?.[key]?.status || "waiting";
+    const status = analysis?.agents?.[key]?.status || "waiting";
     return { key, label, hint, ...(analysis?.agents?.[key] || { status }) };
   });
   const activeAgents = agents.filter((agent) => agent.status !== "skipped");

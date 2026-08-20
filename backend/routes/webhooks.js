@@ -124,12 +124,9 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     ["sentiment", agentDirs.sentiment, "serve.py", [], { owner, repo, issueNumber: issue.number, repo_norms: {} }],
     ["backlog", agentDirs.backlog, "serve.py", [], { owner, repo, repo_norms: {} }, 240000],
   ];
-  // The Planner decides which agents run; when it produced no routing list
-  // (or failed), fall back to the full pipeline.
-  const routed = new Set((selectedAgents || []).map((name) => (name === "missing_info" ? "missingInfo" : name)));
-  const activeSteps = routed.size > 0
-    ? steps.filter(([name]) => routed.has(name))
-    : steps;
+  // The planner is advisory only. The required workflow gates must always run
+  // so missing-info and duplicate results cannot be skipped by routing.
+  const activeSteps = steps;
   let nextStep = record.step;
   async function runStep([name, dir, script, args, payload, timeoutMs]) {
     const rerun = (name === "duplicate" && record.resumeDuplicate) ||
@@ -257,8 +254,8 @@ async function createAnalysis(issue, repository, token, persisted, event = "issu
       // 1. Planner decides what to investigate (visible trace stored).
       const planner = await runPlanner(issue, repository, token, event, record);
       const routed = planner?.routing?.agents || null;
-      // 2. Only the routed subagents run — dynamic, not a fixed pipeline.
-      await runAllAgents(issue, repository, record, token, routed).catch(async (error) => {
+      // 2. Run the required gated pipeline regardless of planner suggestions.
+      await runAllAgents(issue, repository, record, token).catch(async (error) => {
         record.status = "failed";
         record.error = error.message;
         await saveWorkflow(issueRecord, { step: record.step, status: record.status, output: record });
