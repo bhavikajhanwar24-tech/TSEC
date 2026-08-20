@@ -46,12 +46,13 @@ function healthInflection(run) {
   return Boolean(output.inflection_point || output.inflectionPoint || output.is_inflection_point || /inflection[-\s]?point|change[-\s]?point|changepoint/.test(text)) && !/no\s+(clear\s+)?inflection|routine/.test(text);
 }
 
-function scoreRuns(agentRuns) {
+function scoreRuns(agentRuns, hotspot = {}) {
   const breakdown = {};
   const triggeringCategories = [];
   let securityShortCircuit = false;
   let combinedScore = 0;
   let sentimentMultiplier = 1;
+  const duplicateFailed = agentRuns.some((run) => normalizeCategory(run) === "duplicate" && run.status === "failed");
 
   for (const run of agentRuns) {
     const category = normalizeCategory(run);
@@ -90,11 +91,22 @@ function scoreRuns(agentRuns) {
 
   const aggregateConfidence = Math.max(0, Math.min(1, combinedScore * sentimentMultiplier));
   if (securityShortCircuit) triggeringCategories.unshift("security");
+  const urgencyReasons = [];
+  let urgency = Math.round(aggregateConfidence * 60);
+  if (securityShortCircuit) { urgency += 35; urgencyReasons.push("security sensitivity"); }
+  if (hotspot.isDuplicateHotspot) { urgency += 20; urgencyReasons.push(`${hotspot.duplicateHotspotCount} open duplicate issues`); }
+  if (sentimentMultiplier > 1) { urgency += Math.round((sentimentMultiplier - 1) * 20); urgencyReasons.push("contention or sentiment signal"); }
+  if (duplicateFailed) { urgency += 25; urgencyReasons.push("duplicate detection failed"); }
+  urgency = Math.max(0, Math.min(100, urgency));
   return {
-    needsAttention: securityShortCircuit || aggregateConfidence >= SCORE_THRESHOLD,
+    needsAttention: securityShortCircuit || aggregateConfidence >= SCORE_THRESHOLD || hotspot.isDuplicateHotspot || duplicateFailed,
     triggeringCategories: [...new Set(triggeringCategories)],
     aggregateConfidence,
     perCategoryBreakdown: breakdown,
+    urgency,
+    isDuplicateHotspot: Boolean(hotspot.isDuplicateHotspot),
+    duplicateHotspotCount: hotspot.duplicateHotspotCount || 0,
+    urgencyReasons,
   };
 }
 

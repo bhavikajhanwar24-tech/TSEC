@@ -176,6 +176,19 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
       await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
       return;
     }
+    if (name === "duplicate" && result.error) {
+      const failureComment = `Hi ${issue.user?.login ? `@${issue.user.login}` : "there"}. The duplicate check could not complete because the analysis service encountered an error. This issue has been closed temporarily to prevent duplicate processing. Please reopen it with additional details if it still needs review.`;
+      try {
+        await githubIssueAction(owner, repo, issue.number, token, "COMMENT", { body: failureComment });
+      } catch (error) {
+        console.error(`Duplicate failure comment failed for ${owner}/${repo}#${issue.number}:`, error.message);
+      }
+      await githubIssueAction(owner, repo, issue.number, token, "PATCH", { state: "closed", state_reason: "not planned" });
+      record.status = "duplicate_check_failed_closed";
+      record.stopReason = "Duplicate check failed; issue was closed temporarily and requires human review if reopened.";
+      await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
+      return;
+    }
     if (name === "missingInfo" && result.missing_fields?.length) {
       if (result.draft_comment) await githubIssueAction(owner, repo, issue.number, token, "POST", { body: result.draft_comment });
       record.status = "waiting_missing_info";

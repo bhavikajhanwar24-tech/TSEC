@@ -14,10 +14,10 @@ router.get("/:owner/:repo/escalations", async (req, res) => {
   try {
     const decisions = await EscalationDecision.findAll({
       where: { needsAttention: true },
-      include: [{ model: require("../models").Issue, as: "issue", where: { repoFullName: `${req.params.owner}/${req.params.repo}` } }],
+      include: [{ model: require("../models").Issue, as: "issue", where: { repoFullName: `${req.params.owner}/${req.params.repo}` }, include: [{ association: "agentRuns" }, { association: "timelines" }] }],
       order: [["createdAt", "DESC"]],
     });
-    return res.json({ decisions: decisions.map((decision) => ({ ...decision.toJSON(), issue: decision.issue.toJSON() })) });
+    return res.json({ decisions: decisions.map((decision) => ({ ...decision.toJSON(), issue: decision.issue.toJSON(), agentRuns: decision.issue.agentRuns || [], timelines: decision.issue.timelines || [] })) });
   } catch (error) {
     console.error("Escalation queue lookup failed:", error.message);
     return res.status(500).json({ error: "Could not load escalation queue" });
@@ -34,10 +34,10 @@ router.get("/:issueId/escalation", async (req, res) => {
     const resolvedIssueId = issue?.id || req.params.issueId;
     if (!issue) return res.status(404).json({ error: "Issue not found" });
     const decision = await EscalationDecision.findOne({ where: { issueId: resolvedIssueId } });
-    if (decision) return res.json({ pending: false, ...decision.toJSON() });
+    if (decision) return res.json({ pending: false, ...decision.toJSON(), issue: issue.toJSON(), agentRuns: issue.agentRuns || [], timelines: issue.timelines || [] });
 
     const runs = await AgentRun.findAll({ where: { issueId: resolvedIssueId } });
-    return res.json(pendingDecision(runs.filter((run) => REQUIRED_CATEGORIES.has(normalizeCategory(run)))));
+    return res.json({ ...pendingDecision(runs.filter((run) => REQUIRED_CATEGORIES.has(normalizeCategory(run)))), issue: issue.toJSON(), agentRuns: runs, timelines: [] });
   } catch (error) {
     console.error("Escalation decision lookup failed:", error.message);
     return res.status(500).json({ error: "Could not load escalation decision" });

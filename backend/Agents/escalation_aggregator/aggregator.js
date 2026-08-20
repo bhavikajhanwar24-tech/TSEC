@@ -1,4 +1,4 @@
-const { AgentRun, EscalationDecision } = require("../../models");
+const { AgentRun, EscalationDecision, Issue } = require("../../models");
 const { notifyMaintainersOfEscalation } = require("../../services/notificationService");
 const { normalizeCategory, scoreRuns } = require("./scoringRules");
 
@@ -8,7 +8,6 @@ const REQUIRED_CATEGORIES = new Set([
   "security",
   "sentiment",
   "backlog_context",
-  "repository_health",
 ]);
 
 function pendingDecision(agentRuns) {
@@ -27,6 +26,10 @@ async function persistDecision(issueId, decision, notificationSent) {
     triggeringCategories: decision.triggeringCategories,
     aggregateConfidence: decision.aggregateConfidence,
     perCategoryBreakdown: decision.perCategoryBreakdown,
+    urgency: decision.urgency,
+    isDuplicateHotspot: decision.isDuplicateHotspot,
+    duplicateHotspotCount: decision.duplicateHotspotCount,
+    urgencyReasons: decision.urgencyReasons,
     notificationSent,
   };
   const [record] = await EscalationDecision.findOrCreate({ where: { issueId }, defaults: values });
@@ -57,14 +60,24 @@ async function notifyForDecision(issue, agentRuns, decision) {
 async function evaluateIssueForEscalation(issueId) {
   const agentRuns = await AgentRun.findAll({ where: { issueId } });
   const present = new Set(agentRuns.map(normalizeCategory));
-  if (present.size < REQUIRED_CATEGORIES.size || [...REQUIRED_CATEGORIES].some((category) => !present.has(category))) {
+  const duplicateFailed = agentRuns.some((run) => normalizeCategory(run) === "duplicate" && run.status === "failed");
+  if (!duplicateFailed && (present.size < REQUIRED_CATEGORIES.size || [...REQUIRED_CATEGORIES].some((category) => !present.has(category)))) {
     return pendingDecision(agentRuns);
   }
 
-  const decision = scoreRuns(agentRuns);
+  const issue = agentRuns[0] ? await agentRuns[0].getIssue() : null;
+  const repoRuns = issue ? await AgentRun.findAll({
+    include: [{ model: Issue, as: "issue", where: { repoFullName: issue.repoFullName } }],
+    where: { agentName: "duplicate" },
+  }) : [];
+  const duplicateHotspotCount = repoRuns.filter((run) => {
+    const output = run.output || {};
+    return run.issue?.state === "open" && (output.is_direct_duplicate || output.suggested_action === "link_open_issue");
+  }).length;
+  const isDuplicateHotspot = duplicateHotspotCount >= 3;
+  const decision = scoreRuns(agentRuns, { duplicateHotspotCount, isDuplicateHotspot });
   const existing = await EscalationDecision.findOne({ where: { issueId } });
   if (existing) return { pending: false, ...existing.toJSON() };
-  const issue = agentRuns[0] ? await agentRuns[0].getIssue() : null;
   const notificationSent = issue ? await notifyForDecision(issue, agentRuns, decision) : false;
   const record = await persistDecision(issueId, decision, notificationSent);
   return { ...decision, notificationSent, pending: false, id: record.id };

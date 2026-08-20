@@ -235,6 +235,22 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .chat-form textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .chat-form .primary-button { border: 0; cursor: pointer; }
 .chat-form .primary-button:disabled { cursor: not-allowed; opacity: .55; }
+.escalation-evidence-card { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 12px; margin: 16px 0; padding: 20px; }
+.escalation-evidence-heading { align-items: flex-start; display: flex; justify-content: space-between; }
+.escalation-evidence-heading h2 { font-size: 24px; margin: 0; }
+.escalation-evidence-card > p { color: var(--muted); font-size: 13px; }
+.hotspot-badge { background: #fff0e8; border-radius: 12px; color: #c24f20; display: inline-block; font-size: 10px; padding: 5px 8px; white-space: nowrap; }
+.escalation-thread { background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font-size: 12px; line-height: 1.55; margin-top: 12px; padding: 13px; }
+.escalation-thread > p { white-space: pre-wrap; }
+.escalation-thread div { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; white-space: pre-wrap; }
+.escalation-agent-details { margin-top: 12px; }
+.escalation-agent-details summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 700; }
+.escalation-agent-details > div { border-top: 1px solid var(--line); margin-top: 9px; padding-top: 9px; }
+.escalation-agent-details p { color: var(--muted); font-size: 12px; }
+.escalation-agent-details pre { background: var(--nav); border-radius: 6px; color: #d7deeb; font: 10px/1.4 Consolas, monospace; max-height: 180px; overflow: auto; padding: 9px; white-space: pre-wrap; }
+.escalation-filters { border-bottom: 1px solid var(--line); margin-bottom: 8px; padding-bottom: 10px; }
+.escalation-filters label { color: var(--muted); font-size: 12px; }
+.escalation-filters select { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); margin-left: 7px; padding: 6px 8px; }
 .dashboard-chat-hint { align-items: center; background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; color: var(--muted); display: flex; gap: 12px; margin: 0 0 22px; padding: 13px 15px; }
 .dashboard-chat-hint strong { color: var(--ink); font-size: 13px; }
 .dashboard-chat-hint span { font-size: 12px; }

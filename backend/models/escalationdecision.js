@@ -40,6 +40,10 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       defaultValue: false,
     },
+    urgency: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    isDuplicateHotspot: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    duplicateHotspotCount: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    urgencyReasons: { type: DataTypes.JSON, allowNull: false, defaultValue: [] },
   });
 
   EscalationDecision.associate = (models) => {

@@ -2098,6 +2098,29 @@ function CentralAnalysisDashboard({
                     <span>workflow step</span>
                   </div>
                 </section>
+                {escalation?.pending === false && (
+                  <section className="escalation-evidence-card">
+                    <div className="escalation-evidence-heading">
+                      <div>
+                        <p className="eyebrow">Escalation evidence</p>
+                        <h2>Urgency {Number(escalation.urgency || 0)}/100</h2>
+                      </div>
+                      {escalation.isDuplicateHotspot && <span className="hotspot-badge">Duplicate hotspot</span>}
+                    </div>
+                    <p>{(escalation.urgencyReasons || []).join(" · ") || "Urgency is based on completed agent signals."}</p>
+                    <div className="escalation-thread">
+                      <strong>Issue and user discussion</strong>
+                      <p>{escalation.issue?.body || issue.body || "No issue description."}</p>
+                      {(escalation.timelines || []).map((timeline, index) => (
+                        <div key={`${timeline.eventType}-${index}`}><b>{timeline.actor || "user"}:</b> {timeline.body}</div>
+                      ))}
+                    </div>
+                    <details className="escalation-agent-details">
+                      <summary>Agent reasons and evidence</summary>
+                      {(escalation.agentRuns || []).map((run) => <div key={run.id}><b>{run.agentName}</b> · {run.status}<p>{run.reasoning}</p><pre>{JSON.stringify(run.output || {}, null, 2)}</pre></div>)}
+                    </details>
+                  </section>
+                )}
                 {error && <p className="detail-error">{error}</p>}
                 <section className="analysis-content-grid">
                   <article className="selected-agent-card">
@@ -2493,6 +2516,7 @@ function RepositoryOverviewDashboard({
   } = details;
   const [selectedIssue, setSelectedIssue] = useState(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [escalationFilter, setEscalationFilter] = useState("all");
   const openIssues = issues.filter(
     (issue) => !issue.pull_request && issue.state === "open",
   );
@@ -2818,7 +2842,14 @@ function RepositoryTabDashboard({
     (issue) =>
       !issue.pull_request && escalationDecisions[issue.number]?.needsAttention,
   );
-  const highPriorityIssues = [...escalationIssues].sort(
+  const filteredEscalationIssues = escalationIssues.filter((issue) => {
+    const decision = escalationDecisions[issue.number] || {};
+    if (escalationFilter === "hotspot") return decision.isDuplicateHotspot;
+    if (escalationFilter === "security") return (decision.triggeringCategories || []).includes("security");
+    if (escalationFilter === "failed") return (decision.urgencyReasons || []).some((reason) => reason.includes("failed"));
+    return true;
+  });
+  const highPriorityIssues = [...filteredEscalationIssues].sort(
     (first, second) =>
       Number(escalationDecisions[second.number]?.aggregateConfidence || 0) -
       Number(escalationDecisions[first.number]?.aggregateConfidence || 0),
@@ -2865,6 +2896,9 @@ function RepositoryTabDashboard({
           </div>
           <span className="count-label">{highPriorityIssues.length}</span>
         </div>
+        <div className="escalation-filters">
+          <label>Filter <select value={escalationFilter} onChange={(event) => setEscalationFilter(event.target.value)}><option value="all">All attention</option><option value="hotspot">Duplicate hotspots</option><option value="security">Security</option><option value="failed">Agent failures</option></select></label>
+        </div>
         {highPriorityIssues.length ? (
           <div className="high-priority-list">
             {highPriorityIssues.map((issue) => {
@@ -2882,11 +2916,9 @@ function RepositoryTabDashboard({
                   <div className="high-priority-meta">
                     <span>Flagged by: {categories || "escalation"}</span>
                     <strong>
-                      {Math.round(
-                        Number(decision.aggregateConfidence || 0) * 100,
-                      )}
-                      % confidence
+                      Urgency {Number(decision.urgency || 0)}/100 · {Math.round(Number(decision.aggregateConfidence || 0) * 100)}% confidence
                     </strong>
+                    {decision.isDuplicateHotspot && <span className="hotspot-badge">Hotspot · {decision.duplicateHotspotCount}</span>}
                   </div>
                 </div>
               );
