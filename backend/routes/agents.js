@@ -61,8 +61,8 @@ function extractJson(stdout) {
   return JSON.parse(stdout.slice(start));
 }
 
-function runAgentJob(agentDir, script, args, stdinPayload, env) {
-  return runAgent(agentDir, script, args, stdinPayload, env).then(({ stdout }) => extractJson(stdout));
+function runAgentJob(agentDir, script, args, stdinPayload, env, timeoutMs) {
+  return runAgent(agentDir, script, args, stdinPayload, env, timeoutMs).then(({ stdout }) => extractJson(stdout));
 }
 
 // POST /api/agents/backlog-sweep
@@ -79,7 +79,8 @@ router.post("/backlog-sweep", requireAuth, async (req, res) => {
       "serve.py",
       [],
       { owner, repo, repo_norms: repoNorms || {} },
-      { GITHUB_TOKEN: req.session.githubToken }
+      { GITHUB_TOKEN: req.session.githubToken },
+      240000
     );
     res.json(extractJson(stdout));
   } catch (err) {

@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, TypedDict, Literal
 from dotenv import load_dotenv
@@ -166,34 +167,20 @@ def _comment_history_text(issue: Dict[str, Any]) -> str:
     return comment_history_str or "(No comments on this issue yet)"
 
 
-def _analyze_one(issue: Dict[str, Any], repo_norms: Dict[str, Any], memory_context: str = "", owner: str = "", repo: str = "") -> Dict[str, Any]:
+def _analyze_one(issue: Dict[str, Any], repo_norms: Dict[str, Any], memory_context: str = "", use_llm: bool = True) -> Dict[str, Any]:
     """Analyze a single issue: NVIDIA structured output when configured, else
     the deterministic heuristic. This is the unit of work for the parallel
     sweep — it never raises."""
     issue_number = issue.get("number")
     comment_history_str = _comment_history_text(issue)
 
-    if not memory_context and owner and repo:
-        try:
-            embedder = memory_store.build_embedder()
-            query_text = f"{issue.get('title', '')}\n{issue.get('description', '')}"
-            hits = memory_store.retrieve(owner, repo, embedder.embed_query(query_text), k=3, where={"kind": "issue"})
-            memory_context = "\n".join(
-                f"- issue #{h['metadata'].get('number', '?')}: "
-                f"blocked_by={h['metadata'].get('blocked_by', '?')}, "
-                f"action={h['metadata'].get('action_recommendation', '?')} — {h['text'][:160]}"
-                for h in hits
-            ) or "(no similar issues in memory yet)"
-        except Exception:
-            memory_context = "(memory unavailable)"
-
     api_key = os.getenv("NVIDIA_API_KEY")
-    is_mock = not api_key or api_key == "your_nvidia_api_key_here"
+    is_mock = not api_key or api_key == "your_nvidia_api_key_here" or not use_llm
 
     analysis = None
     if not is_mock:
         try:
-            model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
+            model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
             llm = ChatNVIDIA(
                 model=model_name,
                 api_key=api_key,
@@ -232,11 +219,22 @@ def _analyze_one(issue: Dict[str, Any], repo_norms: Dict[str, Any], memory_conte
     return analysis
 
 
+# Hard budget for the LLM analysis phase. The backend kills the agent at 180s,
+# so everything here must fit comfortably inside it (fetch + ingest need the
+# rest). When the deadline is close, remaining issues are classified with the
+# instant deterministic heuristic instead of the LLM — the sweep always finishes.
+ANALYSIS_BUDGET_SECONDS = 100.0
+HEURISTIC_FALLBACK_WAVE_SECONDS = 30.0
+INGEST_BUDGET_SECONDS = 25.0
+MAX_WORKERS = 4
+
+
 def analyze_issue_node(state: AgentState) -> Dict[str, Any]:
-    """Node that evaluates ALL issues in parallel (LLM calls are I/O-bound) and
-    returns every analysis at once. Bounded: serve.py already caps the issue
-    list to the stalest subset, so a full sweep completes in seconds instead of
-    minutes of sequential LLM calls."""
+    """Node that evaluates ALL issues in parallel (LLM calls are I/O-bound) in
+    waves under a hard time budget, then persists to project memory
+    sequentially. serve.py already caps the issue list to the stalest subset,
+    so a full sweep completes in seconds instead of minutes of sequential LLM
+    calls — and never exceeds the backend timeout."""
     issues = state["issues"]
     if not issues:
         return {"analysis_results": [], "current_index": 0}
@@ -245,24 +243,56 @@ def analyze_issue_node(state: AgentState) -> Dict[str, Any]:
     owner = state.get("owner", "")
     repo = state.get("repo", "")
 
+    # One shared retrieval pass for the whole sweep (not one per issue): pull
+    # comparable past issues from the project memory once, then feed the same
+    # context to every analysis. First sweeps have nothing to retrieve anyway.
+    if not memory_context and owner and repo:
+        try:
+            embedder = memory_store.build_embedder()
+            query_text = (
+                " ".join(
+                    f"{i.get('title', '')} {i.get('description', '')}".strip()
+                    for i in issues[:10]
+                ).strip()
+                or "open issues"
+            )
+            hits = memory_store.retrieve(owner, repo, embedder.embed_query(query_text), k=3, where={"kind": "issue"})
+            memory_context = "\n".join(
+                f"- issue #{h['metadata'].get('number', '?')}: "
+                f"blocked_by={h['metadata'].get('blocked_by', '?')}, "
+                f"action={h['metadata'].get('action_recommendation', '?')} — {h['text'][:160]}"
+                for h in hits
+            ) or ""
+        except Exception:
+            memory_context = ""
+
+    deadline = time.monotonic() + ANALYSIS_BUDGET_SECONDS
     results: List[Dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [
-            pool.submit(_analyze_one, issue, state["repo_norms"], memory_context, owner, repo)
-            for issue in issues
-        ]
-        for future in as_completed(futures):
-            results.append(future.result())
+    index = 0
+    while index < len(issues):
+        wave = issues[index : index + MAX_WORKERS]
+        use_llm = (deadline - time.monotonic()) > HEURISTIC_FALLBACK_WAVE_SECONDS
+        with ThreadPoolExecutor(max_workers=len(wave)) as pool:
+            futures = [
+                pool.submit(_analyze_one, issue, state["repo_norms"], memory_context, use_llm)
+                for issue in wave
+            ]
+            results.extend(future.result() for future in futures)
+        index += len(wave)
 
     # stable order for the report
     results.sort(key=lambda r: r.get("issue_number", 0))
 
     # Persist into the shared project memory sequentially (Chroma is not
-    # thread-safe for concurrent writes). Never blocks the pipeline.
+    # thread-safe for concurrent writes) and only while the ingest budget
+    # allows. Never blocks the pipeline.
     if owner and repo:
         try:
             embedder = memory_store.build_embedder()
+            ingest_deadline = time.monotonic() + INGEST_BUDGET_SECONDS
             for issue, analysis in zip(issues, results):
+                if time.monotonic() > ingest_deadline:
+                    break
                 issue_text = f"{issue.get('title', '')}\n{issue.get('description', '')}\n{_comment_history_text(issue)}"
                 memory_store.ingest(
                     owner,
