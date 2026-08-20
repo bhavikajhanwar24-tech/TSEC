@@ -178,6 +178,11 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 @media (max-width: 520px) { .analysis-workspace-header { padding: 0 16px; }.analysis-brand span:not(.brand-symbol) { display: none; }.analysis-header-actions { gap: 8px; }.analysis-main-heading { display: block; }.analysis-status-chip { display: inline-block; margin-top: 14px; }.analysis-metric-strip strong { font-size: 19px; }.issue-summary-card, .risk-card, .selected-agent-card, .workflow-card { padding: 17px; } }
 
 .repo-chat { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); margin: 22px 0 0; padding: 24px; }
+.repo-dashboard-sidebar > .repo-chat { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; width: 100%; }
+.repo-dashboard-sidebar > .repo-chat .chat-heading { flex: 0 0 auto; }
+.repo-dashboard-sidebar > .repo-chat .chat-suggestions { flex: 0 0 auto; }
+.repo-dashboard-sidebar > .repo-chat .chat-transcript { flex: 1 1 auto; max-height: none; min-height: 0; }
+.repo-dashboard-sidebar > .repo-chat .chat-form { flex: 0 0 auto; }
 .chat-heading { align-items: flex-start; display: flex; gap: 18px; justify-content: space-between; }
 .chat-heading h2 { font-size: 22px; margin: 0 0 6px; }
 .chat-heading p:not(.eyebrow) { color: var(--muted); font-size: 13px; margin: 0; }
@@ -213,6 +218,8 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 /* Keep the repository workspace consistent when switching away from Overview. */
 .repo-dashboard-page { max-width: none; padding: 20px 0 0; }
 .repo-dashboard-shell { border-radius: 0; min-height: calc(100vh - 112px); width: 100%; }
+.repo-dashboard-sidebar { display: flex; flex-direction: column; min-height: 0; }
+.repo-dashboard-sidebar > nav { flex: 0 0 auto; }
 .repo-dashboard-main { min-height: calc(100vh - 112px); }
 .detail-page { background: var(--surface); border: 1px solid var(--line); border-radius: 0; display: grid; grid-template-columns: 222px minmax(0, 1fr); gap: 0; margin: 20px 0 0; max-width: none; min-height: calc(100vh - 112px); overflow: hidden; padding: 0; }
 .detail-page > .back-button { background: var(--surface); border-bottom: 1px solid var(--line); grid-column: 1 / -1; margin: 0; padding: 18px 28px; text-align: left; }

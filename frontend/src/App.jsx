@@ -1044,6 +1044,7 @@ function RepositoryOverviewDashboard({
               </button>
             ))}
           </nav>
+          <RepositoryChat owner={repo.owner.login} repo={repo.name} />
         </aside>
         <main className="repo-dashboard-main">
           <header className="repo-dashboard-topbar">
@@ -1224,7 +1225,6 @@ function RepositoryOverviewDashboard({
               </div>
             </article>
           </section>
-          <RepositoryChat owner={repo.owner.login} repo={repo.name} />
         </main>
       </div>
       {selectedIssue && (
@@ -1393,6 +1393,7 @@ function RepositoryTabDashboard({
               </button>
             ))}
           </nav>
+          <RepositoryChat owner={repo.owner.login} repo={repo.name} />
         </aside>
         <main className="repo-dashboard-main">
           <header className="repo-dashboard-topbar">
@@ -1884,10 +1885,6 @@ function App() {
                 placeholder="Search repositories"
               />
             </label>
-          </div>
-          <div className="dashboard-chat-hint">
-            <strong>Repository chatbot</strong>
-            <span>Open any repository to ask questions about its issues, pull requests, fixes, and history.</span>
           </div>
           {error && <p className="error-banner">{error}</p>}
           <section className="repo-grid">
