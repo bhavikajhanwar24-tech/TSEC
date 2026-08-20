@@ -4,6 +4,7 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const authRoutes = require("./routes/auth");
 const apiRoutes = require("./routes/api");
+const agentRoutes = require("./routes/agents");
 
 dotenv.config();
 
@@ -42,6 +43,7 @@ app.use(
 
 app.use("/auth", authRoutes);
 app.use("/api", apiRoutes);
+app.use("/api/agents", agentRoutes);
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
