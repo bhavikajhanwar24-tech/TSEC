@@ -34,10 +34,10 @@ function startAgent(name, agentDir, script, args, stdinPayload, env, record) {
     });
 }
 
-function runAllAgents(issue, repository, record) {
+function runAllAgents(issue, repository, record, token = process.env.GITHUB_TOKEN) {
   const owner = repository.owner.login;
   const repo = repository.name;
-  const env = { GITHUB_TOKEN: process.env.GITHUB_TOKEN };
+  const env = { GITHUB_TOKEN: token };
   return Promise.all([
     startAgent("duplicate", agentDirs.duplicate, "duplicate_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue, env, record),
     startAgent("missingInfo", agentDirs.missingInfo, "missing_info_agent.py", ["--repo", `${owner}/${repo}`, "--issue", String(issue.number)], undefined, env, record),
@@ -49,6 +49,22 @@ function runAllAgents(issue, repository, record) {
     record.status = Object.values(record.agents).some((agent) => agent.status === "failed") ? "complete_with_errors" : "complete";
     record.completedAt = new Date().toISOString();
   });
+}
+
+function createAnalysis(issue, repository, token) {
+  const record = {
+    issue,
+    repository: { owner: repository.owner.login, name: repository.name },
+    status: "running",
+    createdAt: new Date().toISOString(),
+    agents: {},
+  };
+  analyses.set(analysisKey(repository.owner.login, repository.name, issue.number), record);
+  runAllAgents(issue, repository, record, token).catch((error) => {
+    record.status = "failed";
+    record.error = error.message;
+  });
+  return record;
 }
 
 function validSignature(req) {
@@ -78,25 +94,30 @@ router.post("/github", (req, res) => {
     return res.status(503).json({ error: "GITHUB_TOKEN is not configured for automatic agents" });
   }
 
-  const record = {
-    issue,
-    repository: { owner: repository.owner.login, name: repository.name },
-    status: "running",
-    createdAt: new Date().toISOString(),
-    agents: {},
-  };
-  analyses.set(analysisKey(repository.owner.login, repository.name, issue.number), record);
+  const record = createAnalysis(issue, repository, process.env.GITHUB_TOKEN);
   res.status(202).json({ accepted: true, processed: true, issue: issue.number });
-  runAllAgents(issue, repository, record).catch((error) => {
-    record.status = "failed";
-    record.error = error.message;
-  });
 });
 
-router.get("/analysis/:owner/:repo/:number", (req, res) => {
+router.get("/analysis/:owner/:repo/:number", async (req, res) => {
   if (!req.session?.githubToken) return res.status(401).json({ error: "Not authenticated" });
-  const record = getAnalysis(req.params.owner, req.params.repo, req.params.number);
-  if (!record) return res.status(404).json({ error: "No automatic analysis found for this issue" });
+  let record = getAnalysis(req.params.owner, req.params.repo, req.params.number);
+  if (!record) {
+    try {
+      const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/issues/${req.params.number}`, {
+        headers: {
+          Authorization: `Bearer ${req.session.githubToken}`,
+          Accept: "application/vnd.github+json",
+          "User-Agent": "RepoGuardian",
+        },
+      });
+      if (!response.ok) return res.status(response.status).json({ error: "Issue not found" });
+      const issue = await response.json();
+      if (issue.pull_request || issue.state !== "open") return res.status(400).json({ error: "Automatic analysis is available for open issues only" });
+      record = createAnalysis(issue, { owner: { login: req.params.owner }, name: req.params.repo }, req.session.githubToken);
+    } catch (error) {
+      return res.status(500).json({ error: `Could not start analysis: ${error.message}` });
+    }
+  }
   res.json(record);
 });
 
