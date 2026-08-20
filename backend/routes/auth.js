@@ -63,7 +63,13 @@ router.get("/github/install", (req, res) => {
 });
 
 router.get("/github/callback", async (req, res) => {
-  const { code, state } = req.query;
+  const { code, state, installation_id: installationId, setup_action: setupAction } = req.query;
+
+  if (installationId || setupAction) {
+    const redirectUrl = new URL(process.env.FRONTEND_URL || "http://localhost:5173");
+    redirectUrl.searchParams.set("github_app", setupAction === "install" ? "installed" : "updated");
+    return res.redirect(redirectUrl.toString());
+  }
 
   if (!code || !state || !isValidOAuthState(state)) {
     return res.status(400).send("Invalid OAuth state");
