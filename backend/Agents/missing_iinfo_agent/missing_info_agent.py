@@ -1,4 +1,4 @@
-"""Missing-information agent for GitHub bug reports.
+"""Missing-information agent for GitHub reports.
 
 Usage:
     python missing_info_agent.py --repo owner/name --issue 513
@@ -10,6 +10,7 @@ Configure credentials in a local .env file or in the process environment.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -30,13 +31,66 @@ import memory_store  # noqa: E402  (shared persistent Chroma memory)
 
 
 GITHUB_API = "https://api.github.com"
-BUG_TERMS = ("bug", "error", "crash", "broken", "fail", "not work", "issue")
+
+# Fields that make a report actionable, per issue type. Every type gets checked,
+# so the agent always produces a meaningful assessment instead of passing through.
+REQUIRED_BY_TYPE = {
+    "bug": ["os", "version", "reproduction_steps", "expected_actual"],
+    "feature": ["use_case", "expected_behavior"],
+    "question": ["context"],
+    "other": ["context"],
+}
+
 FIELD_LABELS = {
     "os": "your operating system",
     "version": "the app or package version",
     "reproduction_steps": "the exact steps to reproduce the issue",
     "expected_actual": "what you expected to happen and what actually happened",
+    "use_case": "the use case or problem this feature solves",
+    "expected_behavior": "the expected behavior of the feature",
+    "context": "more context about what you are trying to do",
 }
+
+# Human-readable section headers that count as evidence a field is present.
+FIELD_MARKERS = {
+    "os": r"(?m)^\s*(?:#+\s*)?(?:os|operating system|platform)(?:\s*[:\-]|\s*$)",
+    "version": r"(?m)^\s*(?:#+\s*)?(?:version|release)(?:\s*[:\-]|\s*$)",
+    "reproduction_steps": r"(?m)^\s*(?:#+\s*)?(?:repro(duction)? steps?|steps to reproduce|steps)(?:\s*[:\-]|\s*$)",
+    "expected_actual": r"(?m)^\s*(?:#+\s*)?(?:expected|actual|what happened|what should happen)(?:\s*[:\-]|\s*$)",
+    "use_case": r"(?m)^\s*(?:#+\s*)?(?:use case|use-case|motivation|problem|why)(?:\s*[:\-]|\s*$)",
+    "expected_behavior": r"(?m)^\s*(?:#+\s*)?(?:expected behavior|expected behaviour|desired behavior|acceptance criteria)(?:\s*[:\-]|\s*$)",
+    "context": r"(?m)^\s*(?:#+\s*)?(?:context|background|details|environment)(?:\s*[:\-]|\s*$)",
+}
+
+# Patterns looked for in the repo's issue template / CONTRIBUTING.md.
+GUIDANCE_PATTERNS = {
+    "bug": {
+        "os": r"\b(os|operating system|platform)\b",
+        "version": r"\b(version|release)\b",
+        "reproduction_steps": r"\b(repro|reproduction|steps to reproduce|steps)\b",
+        "expected_actual": r"\b(expected|actual|behavior|behaviour)\b",
+    },
+    "feature": {
+        "use_case": r"\b(use case|use-case|motivation|problem|why)\b",
+        "expected_behavior": r"\b(expected behavior|expected behaviour|desired|acceptance)\b",
+    },
+}
+
+FIELD_REQUEST = {
+    "os": "your operating system",
+    "version": "the app or package version",
+    "reproduction_steps": "the exact steps to reproduce the issue",
+    "expected_actual": "what you expected to happen and what actually happened",
+    "use_case": "the use case or problem this feature solves",
+    "expected_behavior": "the expected behavior of the feature",
+    "context": "more context about what you are trying to do",
+}
+
+TEMPLATE_PATHS = (
+    ".github/ISSUE_TEMPLATE/bug_report.md",
+    ".github/ISSUE_TEMPLATE/feature_request.md",
+    "CONTRIBUTING.md",
+)
 
 
 class IssueAssessment(BaseModel):
@@ -61,6 +115,19 @@ class AgentState(TypedDict, total=False):
     error: str
 
 
+def _heuristic_type(title: str, body: str) -> str:
+    """Deterministic classification used when no model key is configured or the
+    model call fails. Never guesses: matches on explicit vocabulary."""
+    text = f"{title} {body}".lower()
+    if re.search(r"\b(bug|error|crash|broken|fail|failing|not work|doesn'?t work|exception)\b", text):
+        return "bug"
+    if re.search(r"\b(feature|enhancement|request|please add|would be nice|support for|new option|allow)\b", text):
+        return "feature"
+    if re.search(r"\b(how do|how can|is it possible|question|what is|help me)\b", text):
+        return "question"
+    return "other"
+
+
 def github_request(path: str, token: str) -> Any:
     response = requests.get(
         f"{GITHUB_API}{path}",
@@ -82,16 +149,14 @@ def fetch_issue(state: AgentState) -> AgentState:
         token,
     )
     if "pull_request" in issue:
-        return {"issue": issue, "action": "pass-through"}
+        return {"issue": issue, "action": "pass-through", "issue_type": "other"}
 
     guidance_parts = []
-    for path in (".github/ISSUE_TEMPLATE/bug_report.md", "CONTRIBUTING.md"):
+    for path in TEMPLATE_PATHS:
         try:
             file_data = github_request(
                 f"/repos/{state['owner']}/{state['repo']}/contents/{path}", token
             )
-            import base64
-
             guidance_parts.append(
                 f"{path}:\n{base64.b64decode(file_data['content']).decode('utf-8')}"
             )
@@ -104,54 +169,59 @@ def fetch_issue(state: AgentState) -> AgentState:
 
 def classify_issue(state: AgentState) -> AgentState:
     issue = state["issue"]
-    text = f"{issue.get('title', '')}\n{issue.get('body') or ''}".lower()
-    issue_type = "bug" if any(term in text for term in BUG_TERMS) else "other"
+    title = issue.get("title", "")
+    body = issue.get("body") or ""
+    issue_type = _heuristic_type(title, body)
 
     model_key = os.getenv("NVIDIA_API_KEY")
     if model_key:
-        client = ChatNVIDIA(
-            model=os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"),
-            api_key=model_key,
-            temperature=0,
-            max_completion_tokens=256,
-        ).with_structured_output(IssueAssessment)
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "Classify the GitHub issue as bug, feature, question, or other.",
-                ),
-                ("human", "Title and body:\n{issue_text}"),
-            ]
-        )
-        assessment = (prompt | client).invoke(
-            {"issue_text": f"{issue.get('title', '')}\n{issue.get('body') or ''}"}
-        )
-        issue_type = assessment.issue_type.lower()
+        try:
+            client = ChatNVIDIA(
+                model=os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"),
+                api_key=model_key,
+                temperature=0,
+                max_completion_tokens=256,
+            ).with_structured_output(IssueAssessment)
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        "Classify the GitHub issue into exactly one of: bug, feature, "
+                        "question, other.\n"
+                        "- bug: reports unexpected behavior, crashes, errors, or failures.\n"
+                        "- feature: requests a new capability, enhancement, or support.\n"
+                        "- question: asks how to do something.\n"
+                        "- other: anything else.\n"
+                        "Reply with JSON only.",
+                    ),
+                    ("human", "Title and body:\n{issue_text}"),
+                ]
+            )
+            assessment = (prompt | client).invoke({"issue_text": f"{title}\n{body}"})
+            issue_type = assessment.issue_type.lower()
+        except Exception:
+            issue_type = _heuristic_type(title, body)
 
+    if issue_type not in REQUIRED_BY_TYPE:
+        issue_type = "other"
     return {"issue_type": issue_type}
 
 
 def find_required_fields(state: AgentState) -> AgentState:
-    if state.get("issue_type") != "bug":
-        return {"required_fields": [], "present_fields": [], "missing_fields": []}
+    issue_type = state.get("issue_type", "other")
+    required = list(REQUIRED_BY_TYPE.get(issue_type, ["context"]))
+    guidance = (state.get("guidance") or "").lower()
 
-    guidance = state.get("guidance", "").lower()
-    required = ["os", "version", "reproduction_steps", "expected_actual"]
-    if guidance:
-        required = []
-        if re.search(r"\b(os|operating system|platform)\b", guidance):
-            required.append("os")
-        if re.search(r"\b(version|release)\b", guidance):
-            required.append("version")
-        if re.search(r"\b(repro|reproduction|steps to reproduce|steps)\b", guidance):
-            required.append("reproduction_steps")
-        if re.search(r"\b(expected|actual|behavior|behaviour)\b", guidance):
-            required.append("expected_actual")
-        required = required or ["os", "version", "reproduction_steps", "expected_actual"]
-    else:
-        # No repo template: learn from the project memory — fields that similar
-        # past bug reports in this repo were missing.
+    # Prefer the repo's own template when it explicitly asks for fields.
+    patterns = GUIDANCE_PATTERNS.get(issue_type, {})
+    if patterns and guidance:
+        requested = [field for field in required if re.search(patterns[field], guidance)]
+        if requested:
+            required = requested
+
+    if issue_type == "bug" and not guidance:
+        # No repo template: learn from project memory — fields that similar past
+        # bug reports in this repo were missing.
         try:
             embedder = memory_store.build_embedder()
             issue = state["issue"]
@@ -172,13 +242,7 @@ def find_required_fields(state: AgentState) -> AgentState:
             pass
 
     body = (state["issue"].get("body") or "").lower()
-    markers = {
-        "os": r"(?m)^\s*(?:#+\s*)?(?:os|operating system|platform)(?:\s*[:\-]|\s*$)",
-        "version": r"(?m)^\s*(?:#+\s*)?(?:version|release)(?:\s*[:\-]|\s*$)",
-        "reproduction_steps": r"(?m)^\s*(?:#+\s*)?(?:repro(duction)? steps?|steps to reproduce|steps)(?:\s*[:\-]|\s*$)",
-        "expected_actual": r"(?m)^\s*(?:#+\s*)?(?:expected|actual|what happened|what should happen)(?:\s*[:\-]|\s*$)",
-    }
-    present = [field for field in required if re.search(markers[field], body)]
+    present = [field for field in required if re.search(FIELD_MARKERS[field], body)]
     return {
         "required_fields": required,
         "present_fields": present,
@@ -186,30 +250,28 @@ def find_required_fields(state: AgentState) -> AgentState:
     }
 
 
-def draft_follow_up(state: AgentState) -> AgentState:
-    missing = state.get("missing_fields", [])
-    if state.get("issue_type") != "bug" or not missing:
-        # Still remember the issue in the shared project memory so future runs
-        # can learn what this repo's reports look like. Never blocks.
-        _remember(state)
-        return {"action": "pass-through", "draft_comment": ""}
+def _draft_comment(issue_type: str, missing: List[str]) -> str:
+    points = [f"- {FIELD_REQUEST[field]}" for field in missing if field in FIELD_REQUEST]
+    if not points:
+        return ""
+    if issue_type == "bug":
+        intro = "Thanks for reporting this! To help us reproduce and fix it, could you share the following details?"
+    elif issue_type == "feature":
+        intro = "Thanks for the suggestion! To help us evaluate it, could you share the following details?"
+    else:
+        intro = "Thanks for reaching out! To help you, could you add the following details?"
+    return intro + "\n\n" + "\n".join(points)
 
-    # Remember this report and what it was missing (used as learning signal for
-    # future issues when the repo has no issue template). Never blocks.
+
+def draft_follow_up(state: AgentState) -> AgentState:
+    issue_type = state.get("issue_type", "other")
+    missing = state.get("missing_fields", [])
     _remember(state)
 
-    requested = [FIELD_LABELS[field] for field in missing]
-    if len(requested) == 1:
-        request_text = requested[0]
-    elif len(requested) == 2:
-        request_text = f"{requested[0]} and {requested[1]}"
-    else:
-        request_text = ", ".join(requested[:-1]) + f", and {requested[-1]}"
+    if not missing:
+        return {"action": "pass-through", "draft_comment": ""}
 
-    comment = (
-        "Thanks for reporting this! To help us investigate, could you share "
-        f"{request_text}? This will help us reproduce the issue quickly."
-    )
+    comment = _draft_comment(issue_type, missing)
     return {"action": "needs-info", "draft_comment": comment}
 
 

@@ -307,7 +307,7 @@ def build_embedder() -> Any:
 def node_normalize(state: AgentState) -> AgentState:
     issue = state["issue"]
     text = build_searchable_text(issue)
-    if not issue.get("title") or not issue.get("body"):
+    if not issue.get("title") and not issue.get("body"):
         return {**state, "status": "insufficient_evidence"}
     return {
         **state,
