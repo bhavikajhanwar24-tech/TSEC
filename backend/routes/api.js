@@ -39,7 +39,7 @@ router.get("/repos", async (req, res) => {
 
     while (true) {
       const response = await fetch(
-        `${GITHUB_API}/user/repos?per_page=100&page=${page}&sort=updated`,
+        `${GITHUB_API}/user/repos?visibility=all&affiliation=owner,collaborator,organization_member&per_page=100&page=${page}&sort=updated`,
         { headers: githubHeaders(req.session.githubToken) }
       );
 
