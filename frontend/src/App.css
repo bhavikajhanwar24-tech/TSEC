@@ -129,6 +129,9 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .decision-panel { background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--blue); border-radius: 10px; margin-bottom: 12px; padding: 17px; }
 .decision-panel h3 { font-size: 15px; margin: 0 0 6px; }
 .decision-panel > p:not(.eyebrow) { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.not-triggered-panel { background: #fff; border: 1px solid var(--line); border-left: 4px solid #9aa5b4; border-radius: 10px; padding: 20px; }
+.not-triggered-panel h3 { font-size: 15px; margin: 0 0 7px; }
+.not-triggered-panel p { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 0; }
 .duplicate-panel { border-left-color: #d65b5b; }
 .missing-panel { border-left-color: #d49a20; }
 .sensitivity-panel { border-left-color: #8b5cf6; }

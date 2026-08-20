@@ -86,21 +86,27 @@ const automaticAgents = [
 function AgentAnalysisView({ owner, repo, issue, onClose }) {
   const [analysis, setAnalysis] = useState(null)
   const [error, setError] = useState('')
+  const [notTriggered, setNotTriggered] = useState(false)
 
   useEffect(() => {
     let active = true
     async function load() {
       try {
         const result = await api(`/api/webhooks/analysis/${owner}/${repo}/${issue.number}`)
-        if (active) { setAnalysis(result); setError('') }
+        if (active) { setAnalysis(result); setError(''); setNotTriggered(false) }
       } catch (requestError) {
-        if (active) setError(requestError.message)
+        if (active && requestError.message.startsWith('No automatic analysis')) {
+          setNotTriggered(true)
+          setError('This issue was created before automatic analysis was enabled.')
+        } else if (active) {
+          setError(requestError.message)
+        }
       }
     }
     load()
-    const timer = setInterval(load, 4000)
+    const timer = setInterval(() => { if (!notTriggered) load() }, 4000)
     return () => { active = false; clearInterval(timer) }
-  }, [owner, repo, issue.number])
+  }, [owner, repo, issue.number, notTriggered])
 
   const agents = automaticAgents.map(([key, label, hint]) => ({ key, label, hint, ...(analysis?.agents?.[key] || { status: 'waiting' }) }))
   const complete = agents.filter((agent) => agent.status === 'complete').length
@@ -110,7 +116,7 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
   const duplicateMatches = duplicate?.matches?.filter((match) => match.classification === 'direct_duplicate') || []
   const missing = agents.find((agent) => agent.key === 'missingInfo')?.result
   const sensitivity = agents.find((agent) => agent.key === 'sensitivity')?.result
-  return <div className="analysis-overlay"><div className="analysis-drawer"><div className="analysis-header"><div><p className="eyebrow">Automatic triage</p><h2>Issue #{issue.number}</h2><p>{issue.title}</p></div><button className="close-button" type="button" onClick={onClose}>×</button></div><div className="analysis-issue"><span className="issue-number">#{issue.number}</span><div><strong>{issue.title}</strong><p>{issue.body || 'No description provided.'}</p></div></div><div className="analysis-summary"><div><strong>{complete}/{agents.length}</strong><span>agents complete</span></div><div><strong>{analysis?.status === 'complete' ? 'Ready' : analysis?.status === 'waiting_missing_info' ? 'Waiting for reporter' : 'Running'}</strong><span>analysis status</span></div><div><strong>{failed}</strong><span>errors</span></div></div>{duplicateMatches.length > 0 && <section className="decision-panel duplicate-panel"><p className="eyebrow">Duplicate flow</p><h3>Matched open issues</h3><p>This issue has been mapped to the existing issue below and the workflow stopped.</p>{duplicateMatches.map((match) => <a href={match.url} target="_blank" rel="noreferrer" className="match-card" key={match.issue_number}><strong>#{match.issue_number} · {match.title}</strong><span>{Math.round((match.similarity_score || 0) * 100)}% similarity ↗</span></a>)}</section>}{missing?.missing_fields?.length > 0 && <section className="decision-panel missing-panel"><p className="eyebrow">Missing information</p><h3>Waiting for reporter details</h3><p>{missing.draft_comment || missing.missing_details?.join(', ')}</p></section>}{sensitivity && <section className="decision-panel sensitivity-panel"><p className="eyebrow">Security sensitivity</p><h3>{sensitivity.severity || sensitivity.risk_level || 'Security scan complete'}</h3><p>{sensitivity.recommendation || sensitivity.summary || 'No additional security escalation was reported.'}</p></section>}{error && <p className="detail-error">{error}</p>}<div className="agent-result-grid">{agents.map((agent) => <article className="agent-result-card" key={agent.key}><div className="agent-card-heading"><div><h3>{agent.label}</h3><p>{agent.hint}</p></div><span className={`agent-status ${agent.status}`}>{agent.status}</span></div>{agent.status === 'running' && <div className="agent-progress"><span /></div>}{agent.error && <p className="detail-error">{agent.error}</p>}{agent.result && <pre>{JSON.stringify(agent.result, null, 2)}</pre>}</article>)}</div></div></div>
+  return <div className="analysis-overlay"><div className="analysis-drawer"><div className="analysis-header"><div><p className="eyebrow">Automatic triage</p><h2>Issue #{issue.number}</h2><p>{issue.title}</p></div><button className="close-button" type="button" onClick={onClose}>×</button></div><div className="analysis-issue"><span className="issue-number">#{issue.number}</span><div><strong>{issue.title}</strong><p>{issue.body || 'No description provided.'}</p></div></div>{notTriggered ? <div className="not-triggered-panel"><h3>Automatic analysis was not triggered</h3><p>This issue was created before automatic analysis was enabled. Agents will run automatically for newly created issues and future issue changes.</p></div> : <><div className="analysis-summary"><div><strong>{complete}/{agents.length}</strong><span>agents complete</span></div><div><strong>{analysis?.status === 'complete' ? 'Ready' : analysis?.status === 'waiting_missing_info' ? 'Waiting for reporter' : 'Running'}</strong><span>analysis status</span></div><div><strong>{failed}</strong><span>errors</span></div></div>{duplicateMatches.length > 0 && <section className="decision-panel duplicate-panel"><p className="eyebrow">Duplicate flow</p><h3>Matched open issues</h3><p>This issue has been mapped to the existing issue below and the workflow stopped.</p>{duplicateMatches.map((match) => <a href={match.url} target="_blank" rel="noreferrer" className="match-card" key={match.issue_number}><strong>#{match.issue_number} · {match.title}</strong><span>{Math.round((match.similarity_score || 0) * 100)}% similarity ↗</span></a>)}</section>}{missing?.missing_fields?.length > 0 && <section className="decision-panel missing-panel"><p className="eyebrow">Missing information</p><h3>Waiting for reporter details</h3><p>{missing.draft_comment || missing.missing_details?.join(', ')}</p></section>}{sensitivity && <section className="decision-panel sensitivity-panel"><p className="eyebrow">Security sensitivity</p><h3>{sensitivity.severity || sensitivity.risk_level || 'Security scan complete'}</h3><p>{sensitivity.recommendation || sensitivity.summary || 'No additional security escalation was reported.'}</p></section>}{error && <p className="detail-error">{error}</p>}<div className="agent-result-grid">{agents.map((agent) => <article className="agent-result-card" key={agent.key}><div className="agent-card-heading"><div><h3>{agent.label}</h3><p>{agent.hint}</p></div><span className={`agent-status ${agent.status}`}>{agent.status}</span></div>{agent.status === 'running' && <div className="agent-progress"><span /></div>}{agent.error && <p className="detail-error">{agent.error}</p>}{agent.result && <pre>{JSON.stringify(agent.result, null, 2)}</pre>}</article>)}</div></>}</div></div>
 }
 
 function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
