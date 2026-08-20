@@ -461,7 +461,7 @@ def _draft_with_llm(state: AgentState, missing_details: List[str]) -> Optional[s
             model=os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"),
             api_key=model_key,
             temperature=0.3,
-            max_completion_tokens=300,
+            max_completion_tokens=600,
         )
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -490,8 +490,15 @@ def _draft_with_llm(state: AgentState, missing_details: List[str]) -> Optional[s
                 "missing": "\n".join(f"- {d}" for d in dict.fromkeys(missing_details)),
             }
         )
-        text = (reply.content or "").strip().strip('"')
-        return text if 20 <= len(text) <= 2000 else None
+        content = reply.content or ""
+        if isinstance(content, list):
+            content = "".join(
+                item.get("text", "") if isinstance(item, dict) else str(item)
+                for item in content
+            )
+        text = str(content).strip().strip('"')
+        complete = bool(re.search(r"[.!?)]$", text))
+        return text if 20 <= len(text) <= 2000 and complete else None
     except Exception:
         return None
 

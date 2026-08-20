@@ -70,16 +70,16 @@ async function getWorkflowStatuses(owner, repo) {
   }
 }
 
-async function startAgent(name, agentDir, script, args, stdinPayload, env, record) {
+async function startAgent(name, agentDir, script, args, stdinPayload, env, record, step) {
   record.agents[name] = { status: "running", startedAt: new Date().toISOString() };
   try {
     const result = await runAgentJob(agentDir, script, args, stdinPayload, env);
     record.agents[name] = { status: "complete", result, completedAt: new Date().toISOString() };
-    await saveAgentRun(record.issueRecord, { step: record.step, status: "running" }, name, result);
+    await saveAgentRun(record.issueRecord, { step, status: "running" }, name, result);
     return result;
   } catch (error) {
     record.agents[name] = { status: "failed", error: error.message, completedAt: new Date().toISOString() };
-    await saveAgentRun(record.issueRecord, { step: record.step, status: "complete_with_errors" }, name, { error: error.message }, "failed");
+    await saveAgentRun(record.issueRecord, { step, status: "complete_with_errors" }, name, { error: error.message }, "failed");
     return { error: error.message };
   }
 }
@@ -108,11 +108,19 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     ["backlog", agentDirs.backlog, "serve.py", [], { owner, repo, repo_norms: {} }],
     ["health", agentDirs.health, "health_agent.py", ["--owner", owner, "--repo", repo], undefined],
   ];
-  for (const [name, dir, script, args, payload] of steps) {
-    if (record.agents[name]?.status === "complete" && !(name === "missingInfo" && record.resumeMissingInfo)) continue;
-    record.step += 1;
-    await saveWorkflow(record.issueRecord, { step: record.step, status: "running", output: record });
-    const result = await startAgent(name, dir, script, args, payload, env, record);
+  let nextStep = record.step;
+  async function runStep([name, dir, script, args, payload]) {
+    if (record.agents[name]?.status === "complete" && !(name === "missingInfo" && record.resumeMissingInfo)) return null;
+    const step = ++nextStep;
+    record.step = step;
+    await saveWorkflow(record.issueRecord, { step, status: "running", output: record });
+    return { name, result: await startAgent(name, dir, script, args, payload, env, record, step) };
+  }
+
+  for (const stepDefinition of steps.slice(0, 3)) {
+    const stepResult = await runStep(stepDefinition);
+    if (!stepResult) continue;
+    const { name, result } = stepResult;
     if (name === "duplicate" && result.is_direct_duplicate) {
       const match = result.matches?.find((item) => item.classification === "direct_duplicate");
       const comment = `This issue appears to duplicate #${match?.issue_number || "an existing issue"}. Duplicate analysis found a matching open issue: ${match?.url || ""}`;
@@ -132,6 +140,9 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
       return;
     }
   }
+
+  const remaining = steps.slice(3).filter(([name]) => !record.agents[name] || record.agents[name].status !== "complete");
+  await Promise.all(remaining.map((stepDefinition) => runStep(stepDefinition)));
   record.status = "complete";
   record.completedAt = new Date().toISOString();
   await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
