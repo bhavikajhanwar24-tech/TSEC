@@ -168,17 +168,6 @@ def build_searchable_text(issue: Dict[str, Any]) -> str:
     return "\n".join(filter(None, parts))
 
 
-def likely_reporter_version(signals: Dict[str, Any], text: str) -> Optional[str]:
-    """Infer the reporter's installed version only when the text supports it.
-    Prefers the version mentioned in an upgrade path (e.g. 'upgrading to v3.1')."""
-    low = (text or "").lower()
-    upgrade_matches = re.findall(r"(?:upgrad(?:e|ing)|updated?|after)\s+(?:to\s+)?v?(\d+\.\d+(?:\.\d+)?)", low)
-    candidates = upgrade_matches or signals.get("versions", [])
-    if not candidates:
-        return None
-    return min(candidates, key=lambda v: tuple(int(p) for p in v.split(".")))
-
-
 # ---------------------------------------------------------------------------
 # Embeddings & vector store
 # ---------------------------------------------------------------------------
@@ -522,8 +511,9 @@ def node_compare_evidence(state: AgentState) -> AgentState:
 
 
 def _decide_heuristic(state: AgentState) -> Dict[str, Any]:
-    incoming = state["issue"]
-    reporter_version = likely_reporter_version(state["signals"], state["searchable_text"])
+    """Offline decision. The corpus is guaranteed to contain only OPEN issues
+    (see fetch_corpus / node_embed_and_search), so a direct duplicate always
+    means: link the open issue and close the incoming one."""
     matches = state["matches"]
     top = matches[0] if matches else None
     if not top or top["classification"] != "direct_duplicate":
@@ -536,49 +526,18 @@ def _decide_heuristic(state: AgentState) -> Dict[str, Any]:
             "evidence_gaps": ["no candidate with two matching technical signals"],
         }
     confidence = round(min(0.99, max(0.5, top["similarity_score"]) * 0.6 + 0.4 * min(1.0, top["match_strength"] / 4.0)), 2)
-    fixed_in = top.get("fixed_in_version")
-    candidate_state = top.get("state")
-    action, recommendation = "link_open_issue", ""
-
-    if candidate_state == "closed" and top.get("closure_reason") == "fixed" and fixed_in:
-        if reporter_version and reporter_version != fixed_in and not _version_at_least(reporter_version, fixed_in):
-            action = "comment_and_link"
-            recommendation = (
-                f"{int(confidence * 100)}% match with #{top['issue_number']}, closed and fixed in "
-                f"v{fixed_in}. Ask the reporter (appears to be on v{reporter_version}) to update to "
-                f"v{fixed_in}, link #{top['issue_number']}, and do not escalate unless the issue "
-                "reproduces on the fixed release."
-            )
-        else:
-            action = "escalate"
-            recommendation = (
-                f"Reporter is on the version where #{top['issue_number']} was fixed (v{fixed_in}) but "
-                f"the defect reproduces — possible regression. Escalate with evidence for human review."
-            )
-    elif candidate_state == "closed" and top.get("closure_reason") in ("duplicate", "not_planned", "wont_fix"):
-        action = "link_open_issue"
-        recommendation = (
-            f"Duplicate of #{top['issue_number']}, closed as {top['closure_reason']}. Link the reports; "
-            "do not re-open unless new evidence appears."
-        )
-    else:
-        action = "link_open_issue"
-        recommendation = f"Direct duplicate of open issue #{top['issue_number']}. Link and consolidate discussion."
-
+    evidence = ", ".join(top.get("evidence") or [])
     return {
-        "is_direct_duplicate": top.get("classification") == "direct_duplicate",
+        "is_direct_duplicate": True,
         "duplicate_confidence": confidence,
         "matches": matches[:3],
-        "suggested_action": action,
-        "recommendation": recommendation,
+        "suggested_action": "link_open_issue",
+        "recommendation": (
+            f"Direct duplicate of open issue #{top['issue_number']}. "
+            f"Evidence: {evidence or 'no concrete shared technical signal found'}."
+        ),
         "evidence_gaps": [] if top.get("evidence") else ["no concrete shared technical signal found"],
     }
-
-
-def _version_at_least(v: str, target: str) -> bool:
-    def parts(x: str) -> List[int]:
-        return [int(p) for p in x.split(".")]
-    return parts(v) >= parts(target)
 
 
 def node_decide(state: AgentState) -> AgentState:
@@ -606,13 +565,12 @@ def node_decide(state: AgentState) -> AgentState:
         "You are the final decision node of a GitHub duplicate-check agent. Use ONLY the evidence "
         "produced below — no invented facts.\n\n"
         f"INCOMING ISSUE #{state['issue'].get('number')}:\n{state['searchable_text']}\n\n"
-        "Candidate analyses (JSON), PRE-ORDERED by evidence quality; the primary candidate is matches[0]:\n"
         f"{json.dumps(matches, indent=2)}\n\n"
-        "Base the suggested_action on matches[0]'s state and closure context:\n"
-        "- if matches[0] is closed as 'fixed' in a version newer than the reporter's version, use "
-        "'comment_and_link' and recommend the reporter update to the fixed version.\n"
-        "- if matches[0] is open, use 'link_open_issue'.\n"
-        "- if matches[0] is fixed but the reporter appears to be on the fixed version, use 'escalate'.\n\n"
+        "Base the suggested_action on matches[0] only. All candidates are OPEN issues "
+        "— never consider or reference closed issues:\n"
+        "- direct duplicate of an open issue -> 'link_open_issue' (the incoming issue will be closed and linked).\n"
+        "- related but not a direct duplicate -> 'request_reproduction'.\n"
+        "- nothing relevant -> 'no_action'.\n\n"
         "Produce the final output contract as JSON only:\n"
         '{"is_direct_duplicate": bool, "duplicate_confidence": 0..1, '
         '"matches": [<matches[0..2] as given, in the same order>], '
@@ -696,7 +654,10 @@ def build_graph(issue: Dict[str, Any], corpus: List[Dict[str, Any]], llm: Any, e
 # ---------------------------------------------------------------------------
 
 def run_duplicate_check(issue: Dict[str, Any], owner: str = GITHUB_OWNER, repo: str = GITHUB_REPO) -> Dict[str, Any]:
-    corpus = [github_issue_to_model(i) for i in fetch_corpus(owner, repo)]
+    corpus = [
+        github_issue_to_model(i) for i in fetch_corpus(owner, repo)
+        if i.get("state") == "open"  # duplicates are only ever checked against active issues
+    ]
     if not corpus:
         raise RuntimeError(f"no issue history found for {owner}/{repo} — check GITHUB_TOKEN/Owner/Repo")
     llm = build_llm()
