@@ -1,4 +1,3 @@
-const path = require("path");
 const express = require("express");
 const session = require("express-session");
 const cors = require("cors");
@@ -10,7 +9,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const isProd = process.env.NODE_ENV === "production";
+const isHttps = process.env.NODE_ENV === "production" || process.env.FRONTEND_URL?.startsWith("https://");
 
 app.set("trust proxy", 1);
 app.use(express.json());
@@ -35,16 +34,14 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      sameSite: isProd ? "none" : "lax",
-      secure: isProd,
+      sameSite: isHttps ? "none" : "lax",
+      secure: isHttps,
     },
   })
 );
 
 app.use("/auth", authRoutes);
 app.use("/api", apiRoutes);
-app.use(express.static(path.join(__dirname, "public")));
-
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

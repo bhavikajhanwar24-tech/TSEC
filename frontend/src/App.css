@@ -1,0 +1,38 @@
+.topbar { align-items: center; background: #161b22; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; padding: 14px 24px; position: sticky; top: 0; z-index: 2; }
+.topbar h1 { color: #58a6ff; font-size: 20px; margin: 0; }
+main { margin: 0 auto; max-width: 860px; padding: 24px; }
+.card, .repo-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+.login-card { padding: 32px; text-align: center; }
+.login-card h2 { margin: 0 0 8px; }
+.login-card p, .repo-desc { color: #8b949e; }
+.login-card p { margin-bottom: 24px; }
+.btn { background: #21262d; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; cursor: pointer; display: inline-block; font-size: 14px; font-weight: 600; padding: 10px 20px; text-decoration: none; }
+.btn:hover { background: #30363d; }
+.btn.small { font-size: 12px; padding: 5px 12px; }
+.github-btn { background: #238636; border-color: #2ea043; }
+.github-btn:hover { background: #2ea043; }
+.user-chip { align-items: center; display: flex; gap: 10px; }
+.user-chip img { border-radius: 50%; }
+.repo-card { align-items: center; display: flex; gap: 16px; justify-content: space-between; margin-bottom: 12px; padding: 16px 20px; }
+.repo-info { min-width: 0; }
+.repo-title { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.repo-title strong { color: #58a6ff; overflow-wrap: anywhere; }
+.repo-desc { font-size: 13px; margin: 4px 0; }
+.repo-meta { color: #8b949e; display: flex; flex-wrap: wrap; font-size: 12px; gap: 14px; }
+.badge { border: 1px solid; border-radius: 12px; font-size: 11px; font-weight: 600; padding: 2px 8px; }
+.badge.private { border-color: #d29922; color: #d29922; }
+.badge.public { border-color: #3fb950; color: #3fb950; }
+.tree-view { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; font-family: Consolas, monospace; font-size: 13px; margin: -4px 0 12px; max-height: 480px; overflow: auto; padding: 16px 20px; }
+.tree-header { color: #58a6ff; font-weight: 600; margin-bottom: 10px; }
+.tree { list-style: none; margin-top: 0; padding: 0; }
+.tree-item { padding: 2px 0; white-space: nowrap; }
+.tree-toggle, .tree-label { background: none; border: 0; color: inherit; cursor: pointer; font: inherit; padding: 0; }
+.tree-toggle, .tree-spacer { display: inline-block; width: 16px; }
+.tree-toggle { color: #8b949e; }
+.tree-icon { margin-right: 4px; }
+.folder-name { color: #e6edf3; }
+.folder-name:hover { color: #58a6ff; }
+.file-name { color: #8b949e; }
+.empty, .status { color: #8b949e; padding: 40px 0; text-align: center; }
+.error { background: #da3633; border-radius: 6px; color: #fff; margin: 0 0 16px; padding: 12px; }
+@media (max-width: 600px) { .topbar { align-items: flex-start; flex-direction: column; gap: 12px; } .repo-card { align-items: flex-start; flex-direction: column; } }

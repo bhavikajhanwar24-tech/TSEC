@@ -6,8 +6,6 @@ __pycache__/
 .env.local
 .env.*.local
 
-backend/public/config.js
-
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
