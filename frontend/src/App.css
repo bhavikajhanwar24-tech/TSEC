@@ -248,6 +248,18 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .escalation-agent-details > div { border-top: 1px solid var(--line); margin-top: 9px; padding-top: 9px; }
 .escalation-agent-details p { color: var(--muted); font-size: 12px; }
 .escalation-agent-details pre { background: var(--nav); border-radius: 6px; color: #d7deeb; font: 10px/1.4 Consolas, monospace; max-height: 180px; overflow: auto; padding: 9px; white-space: pre-wrap; }
+.moderator-panel { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
+.moderator-panel h3 { font-size: 15px; margin: 0; }
+.moderator-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.moderator-actions select { background: var(--surface); border: 1px solid var(--line); border-radius: 7px; color: var(--ink); min-width: 190px; padding: 9px; }
+.moderator-actions button { border: 0; cursor: pointer; }
+.moderator-suggestions { display: grid; gap: 6px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.moderator-suggestions > strong { color: var(--muted); font-size: 11px; grid-column: 1 / -1; }
+.moderator-suggestions button { background: var(--surface-soft); border: 1px solid var(--line); border-radius: 7px; color: var(--ink); cursor: pointer; display: flex; flex-direction: column; gap: 3px; padding: 8px; text-align: left; }
+.moderator-suggestions button:hover { border-color: var(--accent); }
+.moderator-suggestions span { font-size: 12px; font-weight: 700; }
+.moderator-suggestions small { color: var(--muted); font-size: 10px; line-height: 1.3; }
+@media (max-width: 560px) { .moderator-actions { align-items: stretch; flex-direction: column; }.moderator-actions select, .moderator-actions button { width: 100%; }.moderator-suggestions { grid-template-columns: 1fr; } }
 .escalation-filters { border-bottom: 1px solid var(--line); margin-bottom: 8px; padding-bottom: 10px; }
 .escalation-filters label { color: var(--muted); font-size: 12px; }
 .escalation-filters select { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); margin-left: 7px; padding: 6px 8px; }

@@ -1875,6 +1875,8 @@ function CentralAnalysisDashboard({
   error,
   notTriggered,
   escalation,
+  moderator,
+  onModeratorAction,
   onClose,
 }) {
   const [activeAgent, setActiveAgent] = useState("sensitivity");
@@ -2119,6 +2121,7 @@ function CentralAnalysisDashboard({
                       <summary>Agent reasons and evidence</summary>
                       {(escalation.agentRuns || []).map((run) => <div key={run.id}><b>{run.agentName}</b> · {run.status}<p>{run.reasoning}</p><pre>{JSON.stringify(run.output || {}, null, 2)}</pre></div>)}
                     </details>
+                    <ModeratorPanel context={moderator} onAction={onModeratorAction} />
                   </section>
                 )}
                 {error && <p className="detail-error">{error}</p>}
@@ -2193,6 +2196,26 @@ function CentralAnalysisDashboard({
       </div>
     </div>
   );
+}
+
+function ModeratorPanel({ context, onAction }) {
+  const [assignee, setAssignee] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  if (!context) return null;
+  async function act(payload) {
+    setBusy(true);
+    setMessage("");
+    try {
+      await onAction(payload);
+      setMessage(payload.reopen ? "Issue reopened." : `Assigned to @${payload.assignee}.`);
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <section className="moderator-panel"><div className="escalation-evidence-heading"><div><p className="eyebrow">Moderator controls</p><h3>Assign or restore ownership</h3></div><span className="count-label">GitHub source of truth</span></div><div className="moderator-actions"><select value={assignee} onChange={(event) => setAssignee(event.target.value)} disabled={busy}><option value="">Choose collaborator</option>{(context.collaborators || []).map((person) => <option value={person.login} key={person.login}>@{person.login}</option>)}</select><button type="button" className="primary-button" disabled={busy || !assignee} onClick={() => act({ assignee })}>Assign task</button>{context.issue?.state === "closed" && <button type="button" className="outline-button" disabled={busy} onClick={() => act({ reopen: true })}>Reopen issue</button>}</div><div className="moderator-suggestions"><strong>Suggested people</strong>{(context.suggestions || []).map((suggestion) => <button type="button" key={suggestion.login} onClick={() => setAssignee(suggestion.login)}><span>@{suggestion.login}</span><small>{suggestion.score}/100 · {suggestion.reasons.join(", ")}</small></button>)}</div>{message && <p className="detail-muted">{message}</p>}</section>;
 }
 
 function PlannerPanel({ planner }) {
@@ -2270,6 +2293,7 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
   const [error, setError] = useState("");
   const [notTriggered, setNotTriggered] = useState(false);
   const [escalation, setEscalation] = useState(null);
+  const [moderator, setModerator] = useState(null);
 
   useEffect(() => {
     function handleKeyDown(event) {
@@ -2291,6 +2315,9 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
               .then(setEscalation)
               .catch(() => setEscalation(null));
           }
+          api(`/api/issues/${owner}/${repo}/moderation/${issue.number}`)
+            .then(setModerator)
+            .catch(() => setModerator(null));
         }
       } catch (requestError) {
         if (
@@ -2345,6 +2372,11 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
         error={error}
         notTriggered={notTriggered}
         escalation={escalation}
+        moderator={moderator}
+        onModeratorAction={async (payload) => {
+          const result = await api(`/api/issues/${owner}/${repo}/moderation/${issue.number}`, { method: "POST", body: payload });
+          setModerator((current) => current ? { ...current, issue: result.issue } : current);
+        }}
         onClose={onClose}
       />
     );
