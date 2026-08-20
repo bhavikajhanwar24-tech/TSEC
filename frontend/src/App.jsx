@@ -120,7 +120,7 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
 }
 
 function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
-  const { repo, issues, pulls, commits, contributors, codeFrequency, codeFrequencyPending } = details
+  const { repo, issues = [], pulls = [], commits = [], contributors = [], codeFrequency = [], codeFrequencyPending } = details
   const openIssues = issues.filter((issue) => !issue.pull_request && issue.state === 'open')
   const openPulls = pulls.filter((pull) => pull.state === 'open')
   const languages = Object.keys(repo.language ? { [repo.language]: true } : {})
@@ -139,7 +139,7 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
       <div className="repo-identity"><span className="repo-mark">◈</span><div><p className="eyebrow">Repository</p><h1>{repo.full_name}</h1><p>{repo.description || 'No description provided.'}</p></div></div>
       <a className="outline-button" href={repo.html_url} target="_blank" rel="noreferrer">Open on GitHub ↗</a>
     </section>
-    <div className="stats"><Stat label="Stars" value={repo.stargazers_count.toLocaleString()} /><Stat label="Forks" value={repo.forks_count.toLocaleString()} /><Stat label="Open issues" value={openIssues.length} /><Stat label="Watchers" value={repo.subscribers_count?.toLocaleString()} /></div>
+    <div className="stats"><Stat label="Stars" value={(repo.stargazers_count || 0).toLocaleString()} /><Stat label="Forks" value={(repo.forks_count || 0).toLocaleString()} /><Stat label="Open issues" value={openIssues.length} /><Stat label="Watchers" value={(repo.subscribers_count || 0).toLocaleString()} /></div>
     <nav className="tabs" aria-label="Repository sections">{tabs.map((tab) => <button className={activeTab === tab ? 'active' : ''} type="button" key={tab} onClick={() => setActiveTab(tab)}>{tab}{tab === 'Issues' && <small>{issues.length}</small>}{tab === 'Pull requests' && <small>{pulls.length}</small>}</button>)}</nav>
     <section className="tab-content">
       {activeTab === 'Overview' && <div className="overview-grid"><div className="panel"><p className="eyebrow">About this repository</p><h2>Project snapshot</h2><dl className="details-list"><div><dt>Default branch</dt><dd>{repo.default_branch}</dd></div><div><dt>License</dt><dd>{repo.license?.name || 'Not specified'}</dd></div><div><dt>Created</dt><dd>{formatDate(repo.created_at)}</dd></div><div><dt>Last updated</dt><dd>{formatDate(repo.updated_at)}</dd></div></dl></div><div className="panel"><p className="eyebrow">Project signals</p><h2>At a glance</h2><div className="signal-list"><div><span>Primary language</span><strong>{languages[0] || 'Not specified'}</strong></div><div><span>Repository size</span><strong>{Math.round(repo.size / 1024)} MB</strong></div><div><span>Visibility</span><strong>{repo.private ? 'Private' : 'Public'}</strong></div></div></div></div>}

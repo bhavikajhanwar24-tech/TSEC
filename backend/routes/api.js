@@ -23,6 +23,13 @@ async function fetchCodeFrequency(url, headers) {
   return { data: [], pending: true };
 }
 
+async function fetchOptionalList(url, headers) {
+  const response = await fetch(url, { headers });
+  if (!response.ok) return [];
+  const data = await response.json().catch(() => []);
+  return Array.isArray(data) ? data : [];
+}
+
 function requireAuth(req, res, next) {
   if (req.path.startsWith("/webhooks")) return next();
   if (!req.session.githubToken) {
@@ -74,27 +81,25 @@ router.get("/repos/:owner/:repo/details", async (req, res) => {
   const baseUrl = `${GITHUB_API}/repos/${owner}/${repo}`;
 
   try {
-    const [repoResponse, issuesResponse, pullsResponse, commitsResponse, contributorsResponse, codeFrequency] = await Promise.all([
+    const [repoResponse, issues, pulls, commits, contributors, codeFrequency] = await Promise.all([
       fetch(baseUrl, { headers }),
-      fetch(`${baseUrl}/issues?state=all&per_page=30`, { headers }),
-      fetch(`${baseUrl}/pulls?state=all&per_page=30`, { headers }),
-      fetch(`${baseUrl}/commits?per_page=30`, { headers }),
-      fetch(`${baseUrl}/contributors?per_page=30`, { headers }),
+      fetchOptionalList(`${baseUrl}/issues?state=all&per_page=30`, headers),
+      fetchOptionalList(`${baseUrl}/pulls?state=all&per_page=30`, headers),
+      fetchOptionalList(`${baseUrl}/commits?per_page=30`, headers),
+      fetchOptionalList(`${baseUrl}/contributors?per_page=30`, headers),
       fetchCodeFrequency(`${baseUrl}/stats/code_frequency`, headers),
     ]);
 
     if (!repoResponse.ok) return res.status(repoResponse.status).json({ error: "Repo not found" });
 
-    const [repoData, issues, pulls, commits, contributors] = await Promise.all(
-      [repoResponse, issuesResponse, pullsResponse, commitsResponse, contributorsResponse].map((response) => response.json())
-    );
+    const repoData = await repoResponse.json();
 
     res.json({
       repo: repoData,
-      issues: Array.isArray(issues) ? issues : [],
-      pulls: Array.isArray(pulls) ? pulls : [],
-      commits: Array.isArray(commits) ? commits : [],
-      contributors: Array.isArray(contributors) ? contributors : [],
+      issues,
+      pulls,
+      commits,
+      contributors,
       codeFrequency: Array.isArray(codeFrequency.data) ? codeFrequency.data : [],
       codeFrequencyPending: codeFrequency.pending,
     });
