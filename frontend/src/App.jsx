@@ -10,7 +10,6 @@ const tabs = [
   "Commits",
   "Contributors",
   "Health",
-  "Code changes",
 ];
 
 async function parseJsonIfPossible(response) {
