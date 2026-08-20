@@ -164,7 +164,8 @@ def extract_signals(text: str) -> Dict[str, Any]:
 
 def build_searchable_text(issue: Dict[str, Any]) -> str:
     parts = [issue.get("title", ""), issue.get("body", "")]
-    for comment in issue.get("comments", []) or []:
+    comments = issue.get("comments") if isinstance(issue.get("comments"), list) else []
+    for comment in comments:
         parts.append(comment if isinstance(comment, str) else comment.get("body", ""))
     return "\n".join(filter(None, parts))
 
@@ -290,7 +291,7 @@ def github_issue_to_model(issue: Dict[str, Any]) -> Dict[str, Any]:
         "state": issue.get("state"),
         "closure_reason": issue.get("state_reason"),
         "labels": [label["name"] for label in issue.get("labels", [])],
-        "comments": issue.get("comments", []),
+        "comments": issue.get("comments") if isinstance(issue.get("comments"), list) else [],
         "comments_url": issue.get("comments_url", ""),
         "created_at": issue.get("created_at"),
         "closed_at": issue.get("closed_at"),
@@ -299,7 +300,8 @@ def github_issue_to_model(issue: Dict[str, Any]) -> Dict[str, Any]:
 
 def full_thread_text(issue: Dict[str, Any]) -> str:
     parts = [issue.get("title", ""), issue.get("body", "")]
-    for comment in issue.get("comments", []) or []:
+    comments = issue.get("comments") if isinstance(issue.get("comments"), list) else []
+    for comment in comments:
         if isinstance(comment, str):
             parts.append(comment)
         else:
