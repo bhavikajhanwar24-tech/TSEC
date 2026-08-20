@@ -171,16 +171,18 @@ function CommitRow({ commit, owner, repo }) {
 }
 
 function ContributorRow({ contributor }) {
+  const contributions = Number(contributor.contributions) || 0;
+  const login = contributor.login || contributor.name || "Anonymous contributor";
   return (
     <article className="contributor-row">
-      <Avatar src={contributor.avatar_url} alt={contributor.login} />
+      <Avatar src={contributor.avatar_url} alt={login} />
       <div>
-        <h3>{contributor.login}</h3>
-        <p>{contributor.contributions.toLocaleString()} contributions</p>
+        <h3>{login}</h3>
+        <p>{contributions.toLocaleString()} contributions</p>
       </div>
       <div className="contribution-bar">
         <span
-          style={{ width: `${Math.min(100, contributor.contributions / 2)}%` }}
+          style={{ width: `${Math.min(100, contributions / 2)}%` }}
         />
       </div>
     </article>
@@ -1482,8 +1484,11 @@ function RepositoryTabDashboard({
           </div>
           <span className="count-label">{contributors.length} people</span>
         </div>
-        {contributors.map((contributor) => (
-          <ContributorRow contributor={contributor} key={contributor.id} />
+        {contributors.map((contributor, index) => (
+          <ContributorRow
+            contributor={contributor}
+            key={contributor.id || contributor.login || `contributor-${index}`}
+          />
         ))}
         {!contributors.length && (
           <EmptyState>No contributor data found.</EmptyState>
@@ -1801,8 +1806,11 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
               </div>
               <span className="count-label">{contributors.length} people</span>
             </div>
-            {contributors.map((contributor) => (
-              <ContributorRow contributor={contributor} key={contributor.id} />
+            {contributors.map((contributor, index) => (
+              <ContributorRow
+                contributor={contributor}
+                key={contributor.id || contributor.login || `contributor-${index}`}
+              />
             ))}
             {!contributors.length && (
               <EmptyState>No contributor data found.</EmptyState>
