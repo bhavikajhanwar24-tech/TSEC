@@ -1808,6 +1808,7 @@ function RepositoryOverviewDashboard({
     issues = [],
     pulls = [],
     contributors = [],
+    contributorsPending = false,
     codeFrequency = [],
   } = details;
   const [selectedIssue, setSelectedIssue] = useState(null);
@@ -2123,6 +2124,7 @@ function RepositoryTabDashboard({
     pulls = [],
     commits = [],
     contributors = [],
+    contributorsPending = false,
     codeFrequency = [],
     codeFrequencyPending,
   } = details;
@@ -2252,7 +2254,7 @@ function RepositoryTabDashboard({
             <p className="eyebrow">People behind the code</p>
             <h2>Contributors</h2>
           </div>
-          <span className="count-label">{contributors.length} people</span>
+          <span className="count-label">{contributors.length} people{contributorsPending ? " · syncing" : ""}</span>
         </div>
         {contributors.map((contributor, index) => (
           <ContributorRow
@@ -2261,7 +2263,7 @@ function RepositoryTabDashboard({
           />
         ))}
         {!contributors.length && (
-          <EmptyState>No contributor data found.</EmptyState>
+          <EmptyState>{contributorsPending ? "GitHub is preparing contributor statistics. Check again shortly." : "No contributor data found."}</EmptyState>
         )}
       </div>
     ),
