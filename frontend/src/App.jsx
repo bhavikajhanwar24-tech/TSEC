@@ -13,6 +13,28 @@ const tabs = [
   "Code changes",
 ];
 
+async function parseJsonIfPossible(response) {
+  const contentType = response.headers.get("content-type") || "";
+  const rawText = await response.text();
+
+  if (!rawText) return null;
+
+  const trimmed = rawText.trim();
+  if (
+    !contentType.includes("application/json") &&
+    !trimmed.startsWith("{") &&
+    !trimmed.startsWith("[")
+  ) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
 async function api(path, options = {}) {
   const url = `${API_BASE}${path}`;
   const response = await fetch(url, {
@@ -21,13 +43,17 @@ async function api(path, options = {}) {
     body: options.body ? JSON.stringify(options.body) : undefined,
     credentials: "include",
   });
+
+  const body = await parseJsonIfPossible(response);
+
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(
-      body.error || `Request failed (${response.status}) at ${url}`,
-    );
+    const errorMessage =
+      (body && typeof body === "object" && (body.error || body.message)) ||
+      `Request failed (${response.status}) at ${url}`;
+    throw new Error(errorMessage);
   }
-  return response.json();
+
+  return body ?? {};
 }
 
 function formatDate(value) {
@@ -914,11 +940,7 @@ function HealthTrendDetail({ result }) {
       : deriveHealthScore(result.trends || []);
   const healthStatus =
     result.health_status ||
-    (healthScore >= 80
-      ? "Healthy"
-      : healthScore >= 60
-        ? "Watch"
-        : "Declining");
+    (healthScore >= 80 ? "Healthy" : healthScore >= 60 ? "Watch" : "Declining");
   const responseTrend = (result.trends || []).find(
     (t) => t.metric === "time_to_first_response_days",
   );
@@ -2477,7 +2499,10 @@ function RepositoryTabDashboard({
             <p className="eyebrow">People behind the code</p>
             <h2>Contributors</h2>
           </div>
-          <span className="count-label">{contributors.length} people{contributorsPending ? " · syncing" : ""}</span>
+          <span className="count-label">
+            {contributors.length} people
+            {contributorsPending ? " · syncing" : ""}
+          </span>
         </div>
         {contributors.map((contributor, index) => (
           <ContributorRow
@@ -2486,7 +2511,11 @@ function RepositoryTabDashboard({
           />
         ))}
         {!contributors.length && (
-          <EmptyState>{contributorsPending ? "GitHub is preparing contributor statistics. Check again shortly." : "No contributor data found."}</EmptyState>
+          <EmptyState>
+            {contributorsPending
+              ? "GitHub is preparing contributor statistics. Check again shortly."
+              : "No contributor data found."}
+          </EmptyState>
         )}
       </div>
     ),
