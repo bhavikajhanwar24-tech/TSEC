@@ -3,6 +3,6 @@ services:
     name: repoguardian-backend
     runtime: node
     rootDir: backend
-    buildCommand: npm ci && python3 -m venv .venv && .venv/bin/pip install -r Agents/Duplicate_agent/requirements.txt
+    buildCommand: npm ci && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
     startCommand: PATH=.venv/bin:$PATH npm start
     healthCheckPath: /health

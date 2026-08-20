@@ -20,7 +20,8 @@ function requireAuth(req, res, next) {
  */
 function runAgent(agentDir, script, args, stdinPayload, env, timeoutMs = DEFAULT_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
-    const child = spawn("python", [script, ...args], {
+    const pythonCommand = process.env.PYTHON_BIN || (process.platform === "win32" ? "python" : path.join(__dirname, "..", ".venv", "bin", "python"));
+    const child = spawn(pythonCommand, [script, ...args], {
       cwd: agentDir,
       env: { ...process.env, ...env },
       windowsHide: true,
