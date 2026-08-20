@@ -44,6 +44,7 @@ app.use(
 app.use("/auth", authRoutes);
 app.use("/api", apiRoutes);
 app.use("/api/agents", agentRoutes);
+app.get("/health", (req, res) => res.json({ ok: true }));
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
