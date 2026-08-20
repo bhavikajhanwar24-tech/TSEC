@@ -2898,6 +2898,74 @@ function RepositoryOverviewDashboard({
   );
 }
 
+function EscalationTrendChart({ decisions }) {
+  const records = Object.values(decisions || {})
+    .map((decision) => ({ ...decision, recordedAt: decision.createdAt || decision.updatedAt }))
+    .filter((decision) => decision.recordedAt)
+    .sort((first, second) => new Date(first.recordedAt) - new Date(second.recordedAt));
+  const dates = [...new Set(records.map((decision) => new Date(decision.recordedAt).toISOString().slice(0, 10)))];
+  if (!dates.length) {
+    return <EmptyState>No escalation history available yet.</EmptyState>;
+  }
+
+  const start = new Date(`${dates[0]}T00:00:00Z`);
+  const end = new Date(`${dates[dates.length - 1]}T00:00:00Z`);
+  const points = [];
+  for (let cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    points.push(cursor.toISOString().slice(0, 10));
+  }
+  const visibleDates = points.length > 14 ? points.slice(-14) : points;
+  const series = visibleDates.map((date) => {
+    const dayRecords = records.filter((decision) => new Date(decision.recordedAt).toISOString().slice(0, 10) === date);
+    return {
+      date,
+      high: dayRecords.filter((decision) => Number(decision.urgency || 0) >= 70).length,
+      medium: dayRecords.filter((decision) => Number(decision.urgency || 0) >= 40 && Number(decision.urgency || 0) < 70).length,
+      low: dayRecords.filter((decision) => Number(decision.urgency || 0) < 40).length,
+    };
+  });
+  const width = 720;
+  const height = 220;
+  const padding = { top: 18, right: 18, bottom: 34, left: 34 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const maximum = Math.max(...series.flatMap((point) => [point.high, point.medium, point.low]), 1);
+  const x = (index) => padding.left + (series.length === 1 ? plotWidth / 2 : (index / (series.length - 1)) * plotWidth);
+  const y = (value) => padding.top + plotHeight - (value / maximum) * plotHeight;
+  const linePoints = (key) => series.map((point, index) => `${x(index)},${y(point[key])}`).join(" ");
+  const labelEvery = Math.max(1, Math.ceil(series.length / 5));
+  return (
+    <div className="escalation-trend-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Escalations over time">
+        {[0, 0.5, 1].map((ratio) => (
+          <g key={ratio}>
+            <line className="escalation-grid-line" x1={padding.left} x2={width - padding.right} y1={y(maximum * ratio)} y2={y(maximum * ratio)} />
+            <text className="escalation-axis-label" x={padding.left - 8} y={y(maximum * ratio) + 4} textAnchor="end">{Math.round(maximum * ratio)}</text>
+          </g>
+        ))}
+        {["high", "medium", "low"].map((key) => (
+          <polyline className={`escalation-line ${key}`} key={key} points={linePoints(key)} fill="none" />
+        ))}
+        {series.map((point, index) => (
+          <g key={point.date}>
+            {index % labelEvery === 0 && <text className="escalation-date-label" x={x(index)} y={height - 10} textAnchor="middle">{new Date(`${point.date}T00:00:00Z`).toLocaleDateString("en", { month: "short", day: "numeric" })}</text>}
+            {[
+              ["high", point.high],
+              ["medium", point.medium],
+              ["low", point.low],
+            ].map(([key, value]) => <circle className={`escalation-point ${key}`} key={key} cx={x(index)} cy={y(value)} r="3"><title>{`${point.date}: ${key} ${value}`}</title></circle>)}
+          </g>
+        ))}
+      </svg>
+      <div className="chart-legend escalation-legend">
+        <span><i className="escalation-legend-high" />High</span>
+        <span><i className="escalation-legend-medium" />Medium</span>
+        <span><i className="escalation-legend-low" />Low</span>
+      </div>
+    </div>
+  );
+}
+
 function RepositoryTabDashboard({
   details,
   activeTab,
@@ -2981,6 +3049,16 @@ function RepositoryTabDashboard({
           </div>
           <span className="count-label">{highPriorityIssues.length}</span>
         </div>
+        <section className="escalation-trend-card">
+          <div className="dashboard-card-heading">
+            <div>
+              <p className="eyebrow">Decision history</p>
+              <h3>Escalations over time</h3>
+            </div>
+            <span>Daily urgency</span>
+          </div>
+          <EscalationTrendChart decisions={escalationDecisions} />
+        </section>
         <div className="escalation-filters">
           <label>Filter <select value={escalationFilter} onChange={(event) => setEscalationFilter(event.target.value)}><option value="all">All attention</option><option value="hotspot">Duplicate hotspots</option><option value="security">Security</option><option value="failed">Agent failures</option></select></label>
         </div>
