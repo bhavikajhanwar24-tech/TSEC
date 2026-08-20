@@ -158,6 +158,8 @@ def fetch_issue_series(owner: str, repo: str, weeks: int, max_issues: int = 500)
                 dup_by_week[_week_key(closed)] += 1
 
         if created >= window_start and issue.get("comments", 0) > 0:
+            author = (issue.get("user") or {}).get("login")
+            first_response_at = None
             for comment in _gh_get(issue["comments_url"]):
                 cdt = _parse_iso(comment.get("created_at"))
                 user = (comment.get("user") or {}).get("login")
@@ -169,8 +171,18 @@ def fetch_issue_series(owner: str, repo: str, weeks: int, max_issues: int = 500)
                     info["last_active"] = cdt
                 commenters[user] = info
                 commenters_by_week[_week_key(cdt)].add(user)
-                if cdt > created:
-                    first_response.append((created_week, (cdt - created).total_seconds() / 3600.0))
+                # First response = first comment by a human who is not the issue
+                # author, strictly after creation. Author self-comments and bot
+                # comments are not responses.
+                is_author = user == author
+                is_bot = (comment.get("user") or {}).get("type") == "Bot"
+                if cdt > created and not is_author and not is_bot:
+                    if first_response_at is None or cdt < first_response_at:
+                        first_response_at = cdt
+            if first_response_at is not None:
+                first_response.append(
+                    (created_week, (first_response_at - created).total_seconds() / 3600.0)
+                )
 
     return {
         "issues": issues,
