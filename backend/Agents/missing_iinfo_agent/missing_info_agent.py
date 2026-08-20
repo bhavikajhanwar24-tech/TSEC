@@ -304,6 +304,85 @@ def _comment_context(comments: List[Dict[str, Any]]) -> str:
     )
 
 
+# Loose patterns that treat a reporter's reply comment as covering a field.
+# Comments usually answer in plain prose without template headings, so the
+# strict section scanner cannot credit them on its own.
+COMMENT_COVERAGE = {
+    "os": r"\b(?:windows(?:\s*\d+)?|mac(?:os)?|linux|ubuntu|debian|fedora|android|ios|iphone|ipad|chrome|firefox|safari)\b",
+    "version": r"\bv?\d+\.\d+(?:\.\d+)?\b",
+    "reproduction_steps": r"(?i)(?:steps?\s*[:=]|\bto reproduce\b|\breproduce[d]?\b|\brepro\b|^\s*\d+[.)])",
+    "expected_actual": r"(?i)\b(?:expected|actual(?:ly)?|instead|but got|should have)\b",
+    "use_case": r"(?i)\b(?:use case|because|so that|would help|motivat)\b",
+    "expected_behavior": r"(?i)\b(?:expected behavior|desired|acceptance|would like|should be able to)\b",
+    "context": r"(?i)\b(?:context|background|trying to|environment|additionally)\b",
+    "logs": r"(?i)\b(?:log(?:s| output)?|console output|traceback|stack trace)\b|```",
+    "error_message": r"(?i)\b(?:error|exception|failed|failure)\b",
+}
+
+# Phrase a follow-up question for a field is expected to contain, used to
+# recognize fields already requested in an earlier comment.
+ASKED_PHRASES = {
+    "os": "operating system",
+    "version": "version",
+    "reproduction_steps": "steps",
+    "expected_actual": "expect",
+    "use_case": "use case",
+    "expected_behavior": "behavior",
+    "context": "context",
+    "logs": "log",
+    "error_message": "error",
+}
+
+_QUESTION_MARKERS = (
+    "?",
+    "please provide",
+    "could you",
+    "can you",
+    "please share",
+    "please add",
+    "please include",
+    "kindly provide",
+)
+
+
+def _is_question_comment(text: str) -> bool:
+    """A comment that asks for something (a question or info request) rather
+    than providing information — typically RepoGuardian's own follow-up."""
+    low = (text or "").lower()
+    return any(marker in low for marker in _QUESTION_MARKERS)
+
+
+def _comment_covers_field(field: str, comments: List[Dict[str, Any]]) -> bool:
+    """Can a reply comment reasonably count as answering this field? Question
+    comments (including our own previous follow-ups) never count as evidence."""
+    pattern = COMMENT_COVERAGE.get(field)
+    if not pattern:
+        return False
+    for comment in comments:
+        text = comment.get("body") or ""
+        if not text or _is_question_comment(text):
+            continue
+        if re.search(pattern, text, re.MULTILINE | re.IGNORECASE):
+            return True
+    return False
+
+
+def _bot_already_asked(field: str, comments: List[Dict[str, Any]]) -> bool:
+    """Did an earlier comment already request this field? If so, do not ask
+    again — the reporter has already been given the chance to provide it."""
+    phrase = ASKED_PHRASES.get(field)
+    if not phrase:
+        return False
+    for comment in comments:
+        text = comment.get("body") or ""
+        if not text:
+            continue
+        low = text.lower()
+        if _is_question_comment(low) and phrase in low:
+            return True
+    return False
+
+
 def fetch_issue(state: AgentState) -> AgentState:
     token = os.environ["GITHUB_TOKEN"]
     issue = github_request(
@@ -318,7 +397,11 @@ def fetch_issue(state: AgentState) -> AgentState:
     )
     if comments:
         discussion = _comment_context(comments)
-        issue = {**issue, "body": f"{issue.get('body') or ''}\n\nGitHub discussion:\n{discussion}"}
+        issue = {
+            **issue,
+            "body": f"{issue.get('body') or ''}\n\nGitHub discussion:\n{discussion}",
+            "comments": comments,
+        }
 
     guidance_parts = []
     for path in TEMPLATE_PATHS:
@@ -484,9 +567,11 @@ def find_required_fields(state: AgentState) -> AgentState:
     issue_type = state.get("issue_type", "other")
     defaults = list(REQUIRED_BY_TYPE.get(issue_type, ["context"]))
     body = state["issue"].get("body") or ""
+    comments = state["issue"].get("comments") or []
 
     # Deterministic template scan first: standard GitHub template sections and
-    # natural-language reports, with placeholder text ignored.
+    # natural-language reports, with placeholder text ignored. A reporter's
+    # plain-prose answer in a comment also counts as covering a field.
     required = defaults
     guidance = (state.get("guidance") or "").lower()
     patterns = GUIDANCE_PATTERNS.get(issue_type, {})
@@ -494,7 +579,10 @@ def find_required_fields(state: AgentState) -> AgentState:
         requested = [field for field in required if re.search(patterns[field], guidance)]
         if requested:
             required = requested
-    detected = [field for field in required if _field_is_present(field, body)]
+    detected = [
+        field for field in required
+        if _field_is_present(field, body) or _comment_covers_field(field, comments)
+    ]
 
     analysis = _analyze_with_llm(state, defaults)
     if analysis is not None:
@@ -657,9 +745,10 @@ def draft_follow_up(state: AgentState) -> AgentState:
     issue_type = state.get("issue_type", "other")
     missing = state.get("missing_fields", [])
     missing_details = state.get("missing_details", [])
+    comments = (state.get("issue") or {}).get("comments") or []
     _remember(state)
 
-    if not missing:
+    def _record(action: str, fields: List[str], details: List[str], comment: str) -> AgentState:
         postgres_store.record_analysis(
             state.get("owner", ""), state.get("repo", ""),
             {
@@ -668,30 +757,31 @@ def draft_follow_up(state: AgentState) -> AgentState:
                 "title": (state.get("issue") or {}).get("title", ""),
                 "required_fields": state.get("required_fields", []),
                 "present_fields": state.get("present_fields", []),
-                "missing_fields": [],
-                "missing_details": [],
-                "draft_comment": "",
-                "action": "pass-through",
+                "missing_fields": fields,
+                "missing_details": details,
+                "draft_comment": comment,
+                "action": action,
             },
         )
-        return {"action": "pass-through", "draft_comment": ""}
+        return {"action": action, "draft_comment": comment}
 
-    comment = _draft_with_llm(state, missing_details) or _draft_comment(issue_type, missing)
-    postgres_store.record_analysis(
-        state.get("owner", ""), state.get("repo", ""),
-        {
-            "issue_number": (state.get("issue") or {}).get("number", 0),
-            "issue_type": issue_type,
-            "title": (state.get("issue") or {}).get("title", ""),
-            "required_fields": state.get("required_fields", []),
-            "present_fields": state.get("present_fields", []),
-            "missing_fields": missing,
-            "missing_details": missing_details,
-            "draft_comment": comment,
-            "action": "needs-info",
-        },
-    )
-    return {"action": "needs-info", "draft_comment": comment}
+    if not missing:
+        return _record("pass-through", [], [], "")
+
+    already_asked = [field for field in missing if _bot_already_asked(field, comments)]
+    to_ask = [field for field in missing if field not in already_asked]
+    if not to_ask:
+        # Everything still missing was already requested in an earlier comment —
+        # do not nag the reporter again.
+        return _record("waiting", missing, missing_details, "")
+
+    details_to_ask = [
+        missing_details[index] if index < len(missing_details) else _detail_for(field)
+        for index, field in enumerate(missing)
+        if field in to_ask
+    ]
+    comment = _draft_with_llm(state, details_to_ask) or _draft_comment(issue_type, to_ask)
+    return _record("needs-info", to_ask, details_to_ask, comment)
 
 
 def _remember(state: AgentState) -> None:

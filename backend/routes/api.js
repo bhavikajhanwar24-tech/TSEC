@@ -3,6 +3,7 @@ const express = require("express");
 const router = express.Router();
 
 const GITHUB_API = "https://api.github.com";
+const chatCache = new Map();
 
 function githubHeaders(token) {
   return {
@@ -28,6 +29,57 @@ async function fetchOptionalList(url, headers) {
   if (!response.ok) return [];
   const data = await response.json().catch(() => []);
   return Array.isArray(data) ? data : [];
+}
+
+function tokens(value) {
+  return new Set(String(value || "").toLowerCase().match(/[a-z0-9_#-]{3,}/g) || []);
+}
+
+function rankDocuments(documents, question) {
+  const queryTokens = tokens(question);
+  return documents
+    .map((document) => {
+      const documentTokens = tokens(document.text);
+      const score = [...queryTokens].reduce((total, token) => total + (documentTokens.has(token) ? 1 : 0), 0);
+      return { ...document, score };
+    })
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 12);
+}
+
+function compact(value, limit = 1800) {
+  const text = String(value || "").trim();
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+async function answerWithNvidia(question, context) {
+  const apiKey = process.env.NVIDIA_API_KEY;
+  if (!apiKey) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      signal: controller.signal,
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: process.env.NVIDIA_CHAT_MODEL || process.env.NVIDIA_MODEL || "nvidia/nemotron-3-ultra-550b-a55b",
+        temperature: 0.1,
+        max_tokens: 700,
+        messages: [
+          { role: "system", content: "You are RepoGuardian's repository historian. Answer only from the supplied repository context. Be concise and precise. Distinguish confirmed facts from inference. If the context does not contain the answer, say that clearly and suggest where to look. Never invent issue numbers, PRs, fixes, authors, dates, or status. Do not reveal hidden reasoning." },
+          { role: "user", content: `Question:\n${question}\n\nRepository context:\n${context}` },
+        ],
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content?.trim() || null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function requireAuth(req, res, next) {
@@ -106,6 +158,66 @@ router.get("/repos/:owner/:repo/details", async (req, res) => {
   } catch (err) {
     console.error("Failed to fetch repository details:", err);
     res.status(500).json({ error: "Failed to fetch repository details" });
+  }
+});
+
+router.post("/repos/:owner/:repo/chat", async (req, res) => {
+  const { owner, repo } = req.params;
+  const question = String(req.body?.question || "").trim();
+  if (!question) return res.status(400).json({ error: "A question is required" });
+  if (question.length > 1200) return res.status(400).json({ error: "Question is too long" });
+  const cacheKey = `${owner}/${repo}:${question.toLowerCase()}`;
+  const cached = chatCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return res.json({ ...cached.value, cached: true });
+  chatCache.delete(cacheKey);
+
+  try {
+    const { Issue } = require("../models");
+    const storedIssuesPromise = Issue.findAll({
+      where: { repoFullName: `${owner}/${repo}` },
+      include: [{ association: "agentRuns" }, { association: "timelines" }],
+      order: [["updatedAt", "DESC"]],
+      limit: 80,
+    }).catch((error) => {
+      console.error("Repository chat database retrieval failed:", error.message);
+      return [];
+    });
+    const [storedIssues, githubIssues] = await Promise.all([
+      storedIssuesPromise,
+      fetchOptionalList(`${GITHUB_API}/repos/${owner}/${repo}/issues?state=all&per_page=80`, githubHeaders(req.session.githubToken)),
+    ]);
+
+    const documents = [];
+    storedIssues.forEach((issue) => {
+      const issueJson = issue.toJSON();
+      const kind = issueJson.isPullRequest ? "PR" : "Issue";
+      documents.push({
+        source: `${kind} #${issueJson.number}`,
+        text: `${kind} #${issueJson.number}: ${issueJson.title}\n${issueJson.body || ""}\nState: ${issueJson.state}\nWorkflow: ${issueJson.workflowStatus} at step ${issueJson.workflowStep}\n${(issueJson.agentRuns || []).map((run) => `${run.agentName} (${run.status}): ${run.reasoning}\n${JSON.stringify(run.output || {})}`).join("\n")}\n${(issueJson.timelines || []).map((timeline) => `${timeline.actor}: ${timeline.body}`).join("\n")}`,
+      });
+    });
+    githubIssues.forEach((item) => {
+      documents.push({
+        source: `${item.pull_request ? "PR" : "Issue"} #${item.number}`,
+        text: `${item.pull_request ? "PR" : "Issue"} #${item.number}: ${item.title}\n${item.body || ""}\nState: ${item.state}\nAuthor: ${item.user?.login || "unknown"}\nCreated: ${item.created_at || ""}\nUpdated: ${item.updated_at || ""}`,
+      });
+    });
+
+    const ranked = rankDocuments(documents, question);
+    const context = ranked.length
+      ? ranked.slice(0, 8).map((document) => `SOURCE: ${document.source}\n${compact(document.text, 700)}`).join("\n\n")
+      : "No stored issue, pull request, or workflow records were found for this repository.";
+    const answer = await answerWithNvidia(question, context);
+    const fallback = ranked.length
+      ? `I found ${ranked.length} related repository record${ranked.length === 1 ? "" : "s"}: ${ranked.map((document) => document.source).join(", ")}. Review the matching records in the dashboard for the confirmed details.`
+      : "I could not find matching issue, pull request, or workflow history for that question.";
+    const value = { answer: answer || fallback, sources: ranked.map(({ source, score }) => ({ source, score })) };
+    chatCache.set(cacheKey, { value, expiresAt: Date.now() + 60_000 });
+    if (chatCache.size > 200) chatCache.delete(chatCache.keys().next().value);
+    res.json(value);
+  } catch (error) {
+    console.error("Repository chat error:", error);
+    res.status(500).json({ error: "Repository chat is temporarily unavailable" });
   }
 });
 
