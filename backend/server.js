@@ -5,6 +5,7 @@ const dotenv = require("dotenv");
 const authRoutes = require("./routes/auth");
 const apiRoutes = require("./routes/api");
 const agentRoutes = require("./routes/agents");
+const webhookRoutes = require("./routes/webhooks");
 
 dotenv.config();
 
@@ -13,7 +14,11 @@ const PORT = process.env.PORT || 3000;
 const isHttps = process.env.NODE_ENV === "production" || process.env.FRONTEND_URL?.startsWith("https://");
 
 app.set("trust proxy", 1);
-app.use(express.json());
+app.use(express.json({
+  verify(req, res, buffer) {
+    req.rawBody = buffer;
+  },
+}));
 
 app.use(
   cors({
@@ -44,6 +49,7 @@ app.use(
 app.use("/auth", authRoutes);
 app.use("/api", apiRoutes);
 app.use("/api/agents", agentRoutes);
+app.use("/api/webhooks", webhookRoutes);
 app.get("/health", (req, res) => res.json({ ok: true }));
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

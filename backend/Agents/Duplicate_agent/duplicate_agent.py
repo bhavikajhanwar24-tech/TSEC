@@ -109,7 +109,10 @@ def extract_signals(text: str) -> Dict[str, Any]:
 
 
 def build_searchable_text(issue: Dict[str, Any]) -> str:
-    return "\n".join(filter(None, [issue.get("title", ""), issue.get("body", "")]))
+    parts = [issue.get("title", ""), issue.get("body", "")]
+    for comment in issue.get("comments", []) or []:
+        parts.append(comment if isinstance(comment, str) else comment.get("body", ""))
+    return "\n".join(filter(None, parts))
 
 
 def likely_reporter_version(signals: Dict[str, Any], text: str) -> Optional[str]:
@@ -212,11 +215,10 @@ def _gh_get(url: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str,
 
 
 def fetch_corpus(owner: str, repo: str, limit: int = 200) -> List[Dict[str, Any]]:
-    """Fetch open and closed issues (plus PRs are excluded by issues?state=all
-    filter below) so the vector store covers the whole history, not just open."""
+    """Fetch only open issues and exclude pull requests from the corpus."""
     url = f"{_API}/repos/{owner}/{repo}/issues"
-    raw = _gh_get(url, params={"state": "all", "per_page": 100, "sort": "updated", "direction": "desc"})
-    issues = [i for i in raw if "pull_request" not in i]  # exclude PRs, keep real issues
+    raw = _gh_get(url, params={"state": "open", "per_page": 100, "sort": "updated", "direction": "desc"})
+    issues = [i for i in raw if "pull_request" not in i and i.get("state") == "open"]
     for issue in issues[:limit]:
         comments = _gh_get(issue["comments_url"])
         issue["comments"] = [{"body": c["body"], "user": c["user"]["login"]} for c in comments]
@@ -322,7 +324,8 @@ def node_embed_and_search(state: AgentState) -> AgentState:
     query_vec = embedder.embed_query(state["searchable_text"])
     incoming_number = state["issue"].get("number")
     candidates = [
-        c for c in store.search(query_vec, k=10) if c["issue"].get("number") != incoming_number
+        c for c in store.search(query_vec, k=10)
+        if c["issue"].get("number") != incoming_number and c["issue"].get("state") == "open"
     ]
 
     # Merge with the persistent project memory: similar PAST issues (with their
@@ -334,7 +337,7 @@ def node_embed_and_search(state: AgentState) -> AgentState:
         for hit in mem_hits:
             meta = hit["metadata"]
             number = meta.get("number")
-            if not number or number in seen:
+            if not number or number == incoming_number or number in seen or meta.get("state") != "open":
                 continue
             seen.add(number)
             candidates.append(
@@ -502,7 +505,7 @@ def _decide_heuristic(state: AgentState) -> Dict[str, Any]:
         recommendation = f"Direct duplicate of open issue #{top['issue_number']}. Link and consolidate discussion."
 
     return {
-        "is_direct_duplicate": True,
+        "is_direct_duplicate": top.get("classification") == "direct_duplicate",
         "duplicate_confidence": confidence,
         "matches": matches[:3],
         "suggested_action": action,
@@ -674,11 +677,15 @@ def main() -> int:
         return 1
 
     if args.issue_json:
-        if not os.path.exists(args.issue_json):
+        if args.issue_json == "-":
+            issue_payload = json.load(sys.stdin)
+        elif not os.path.exists(args.issue_json):
             print(f"error: issue file not found: {args.issue_json}", file=sys.stderr)
             return 1
-        with open(args.issue_json, encoding="utf-8") as fh:
-            issue = json.load(fh)
+        else:
+            with open(args.issue_json, encoding="utf-8") as fh:
+                issue_payload = json.load(fh)
+        issue = issue_payload
         if "number" not in issue:
             print("error: --issue-json payload must contain an 'issue' object", file=sys.stderr)
             return 1

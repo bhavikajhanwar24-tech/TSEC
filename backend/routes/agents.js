@@ -202,3 +202,5 @@ router.post("/sentiment-analysis", requireAuth, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.runAgent = runAgent;
+module.exports.extractJson = extractJson;
