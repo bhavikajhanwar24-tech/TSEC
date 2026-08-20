@@ -3401,6 +3401,442 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
   );
 }
 
+function TrendsSection() {
+  const [windowDays, setWindowDays] = useState(30);
+  const [data, setData] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [pending, setPending] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setPending(true);
+    setError("");
+    Promise.all([
+      api(`/api/trends?window=${windowDays}`),
+      api(`/api/trends/summary?window=${windowDays}`),
+    ])
+      .then(([trends, digest]) => {
+        if (cancelled) return;
+        setData(trends);
+        setSummary(digest);
+      })
+      .catch((requestError) => {
+        if (!cancelled) setError(requestError.message);
+      })
+      .finally(() => {
+        if (!cancelled) setPending(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [windowDays]);
+
+  const totals = data?.totals;
+  const maxBar = Math.max(
+    totals?.openPulls || 0,
+    totals?.mergedPulls || 0,
+    totals?.openIssues || 0,
+    1,
+  );
+  return (
+    <section className="trends-section">
+      <div className="trends-header">
+        <div>
+          <p className="eyebrow">Scalable insights</p>
+          <h2>Cross-repository trends</h2>
+          <p>
+            Time-windowed, metadata-first aggregation across every tracked
+            repository.
+          </p>
+        </div>
+        <label className="window-selector">
+          Window
+          <select
+            value={windowDays}
+            onChange={(event) => setWindowDays(Number(event.target.value))}
+          >
+            <option value={7}>Last 7 days</option>
+            <option value={30}>Last 30 days</option>
+            <option value={90}>Last 90 days</option>
+          </select>
+        </label>
+      </div>
+      {error && <p className="error-banner">{error}</p>}
+      {pending ? (
+        <div className="trends-pending">
+          <span className="loader" />
+          Aggregating {windowDays}-day window
+        </div>
+      ) : data ? (
+        <>
+          <div className="trends-kpi-grid">
+            <Stat label="Open PRs" value={totals.openPulls} />
+            <Stat label="Merged PRs" value={totals.mergedPulls} />
+            <Stat label="Open issues" value={totals.openIssues} />
+            <Stat label="Commits" value={totals.commits} />
+            <Stat label="Contributors" value={totals.contributors} />
+            <Stat label="Risky changes" value={data.risk?.count} />
+            <Stat label="Late merges (>7d)" value={totals.lateMerges} />
+          </div>
+          <div className="trends-chart-row">
+            <article className="trend-card">
+              <div className="dashboard-card-heading">
+                <div>
+                  <p className="eyebrow">Open vs merged</p>
+                  <h3>Pull request flow</h3>
+                </div>
+                <span>{windowDays}d</span>
+              </div>
+              <div className="trend-bars">
+                {["openPulls", "mergedPulls", "openIssues"].map((key) => (
+                  <div className="trend-bar-group" key={key}>
+                    <span
+                      className={
+                        key === "openPulls"
+                          ? "trend-bar open"
+                          : key === "mergedPulls"
+                            ? "trend-bar merged"
+                            : "trend-bar issues"
+                      }
+                      style={{
+                        height: `${Math.max(
+                          4,
+                          ((totals?.[key] || 0) / maxBar) * 100,
+                        )}%`,
+                      }}
+                    />
+                    <small>
+                      {key === "openPulls"
+                        ? "open PRs"
+                        : key === "mergedPulls"
+                          ? "merged"
+                          : "open issues"}
+                    </small>
+                    <b>{totals?.[key] || 0}</b>
+                  </div>
+                ))}
+              </div>
+            </article>
+            <article className="trend-card trend-table-card">
+              <div className="dashboard-card-heading">
+                <div>
+                  <p className="eyebrow">Per repository</p>
+                  <h3>Activity matrix</h3>
+                </div>
+                <span>
+                  {data.generated_ms}ms · cached 5min
+                </span>
+              </div>
+              <table className="trend-table">
+                <thead>
+                  <tr>
+                    <th>Repository</th>
+                    <th>Open</th>
+                    <th>Merged</th>
+                    <th>Issues</th>
+                    <th>Commits</th>
+                    <th>People</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.repos || []).map((row) => (
+                    <tr key={`${row.owner}/${row.repo}`}>
+                      <td>
+                        {row.owner}/{row.repo}
+                      </td>
+                      <td>{row.pulls?.open ?? 0}</td>
+                      <td>{row.pulls?.merged ?? 0}</td>
+                      <td>{row.issues?.open ?? 0}</td>
+                      <td>{row.commits ?? 0}</td>
+                      <td>{row.contributors ?? 0}</td>
+                    </tr>
+                  ))}
+                  {!(data.repos || []).length && (
+                    <tr>
+                      <td colSpan={6}>
+                        <EmptyState>
+                          No repositories tracked yet — open an issue or PR to
+                          track one.
+                        </EmptyState>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              {(data.errors || []).length > 0 && (
+                <p className="trend-errors">
+                  {data.errors.length} repo(s) unavailable — isolated and
+                  skipped.
+                </p>
+              )}
+            </article>
+          </div>
+        </>
+      ) : null}
+      {summary && <SummaryTree summary={summary} windowDays={windowDays} />}
+    </section>
+  );
+}
+
+function SummaryRow({ label, value, depth = 0 }) {
+  return (
+    <div className="summary-row" style={{ paddingLeft: `${depth * 16}px` }}>
+      <span>{label}</span>
+      <b>{value}</b>
+    </div>
+  );
+}
+
+function FileLevel({ owner, repo, windowDays }) {
+  const [files, setFiles] = useState(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+
+  async function expand() {
+    if (files || pending) return;
+    setPending(true);
+    setError("");
+    try {
+      setFiles(await api(`/api/trends/files/${owner}/${repo}?window=${windowDays}`));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="file-level">
+      <button className="file-expand" type="button" onClick={expand}>
+        <span>{files ? "▾" : "▸"}</span>
+        Files changed
+        <small>
+          {pending
+            ? "querying meta tier…"
+            : files
+              ? `${files.file_count} files`
+              : "metadata-first (no diffs)"}
+        </small>
+      </button>
+      {error && <p className="error-banner">{error}</p>}
+      {files && (
+        <div className="file-grid">
+          {files.files.map((file) => (
+            <div className="file-chip" key={file.file} title={file.file}>
+              <span className="file-path">{file.file}</span>
+              <small>
+                {file.prs} PRs · +{file.additions}/-{file.deletions}
+              </small>
+            </div>
+          ))}
+          {!files.files.length && (
+            <EmptyState>
+              No file records in the meta tier for this window (indexed as PRs
+              arrive).
+            </EmptyState>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RepoDigest({ repo, windowDays }) {
+  const [open, setOpen] = useState(false);
+  const [showPrs, setShowPrs] = useState(false);
+  const [showIssues, setShowIssues] = useState(false);
+  return (
+    <div className="digest-repo">
+      <button className="digest-repo-head" type="button" onClick={() => setOpen(!open)}>
+        <span>{open ? "▾" : "▸"}</span>
+        <strong>
+          {repo.owner}/{repo.repo}
+        </strong>
+        <small>
+          {repo.commits.count} commits · {repo.prs.total} PRs (
+          {repo.prs.merged} merged) · {repo.issues.open} open issues
+          {repo.risk.count > 0 ? ` · ${repo.risk.count} risky` : ""}
+        </small>
+      </button>
+      {open && (
+        <div className="digest-repo-body">
+          <div className="digest-grid">
+            <div className="digest-card">
+              <h4>Commits</h4>
+              <SummaryRow label="Total" value={repo.commits.count} />
+              <SummaryRow label="Top authors" value={""} />
+              {repo.commits.top_authors.map((author) => (
+                <SummaryRow
+                  key={author.login}
+                  label={`  ${author.login}`}
+                  value={author.count}
+                  depth={1}
+                />
+              ))}
+              <ul className="digest-list">
+                {repo.commits.recent.slice(0, 5).map((commit) => (
+                  <li key={commit.sha}>
+                    <span>{commit.message}</span>
+                    <small>
+                      {commit.sha} · {commit.author} ·{" "}
+                      {commit.date ? formatDate(commit.date) : ""}
+                    </small>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="digest-card">
+              <button className="digest-card-toggle" type="button" onClick={() => setShowPrs(!showPrs)}>
+                <h4>Pull requests ({repo.prs.open} open / {repo.prs.merged} merged)</h4>
+                <span>{showPrs ? "▾" : "▸"}</span>
+              </button>
+              {showPrs && (
+                <ul className="digest-list">
+                  {repo.prs.list.map((pr) => (
+                    <li key={pr.number}>
+                      <span>
+                        #{pr.number} {pr.title}
+                      </span>
+                      <small>
+                        {pr.author} · {pr.state}
+                        {pr.merged ? " · merged" : ""}
+                      </small>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="digest-card">
+              <button className="digest-card-toggle" type="button" onClick={() => setShowIssues(!showIssues)}>
+                <h4>Unresolved issues ({repo.issues.unresolved})</h4>
+                <span>{showIssues ? "▾" : "▸"}</span>
+              </button>
+              {showIssues && (
+                <ul className="digest-list">
+                  {repo.issues.list.map((issue) => (
+                    <li key={issue.number}>
+                      <span>
+                        #{issue.number} {issue.title}
+                      </span>
+                      <small>
+                        {issue.author} · {issue.state}
+                      </small>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="digest-card">
+              <h4>Risky changes ({repo.risk.count})</h4>
+              <ul className="digest-list">
+                {repo.risk.items.slice(0, 5).map((item, index) => (
+                  <li key={`${item.number}-${index}`}>
+                    <span>
+                      #{item.number} {item.title}
+                    </span>
+                    <small>
+                      {item.category} · {Math.round(item.confidence * 100)}% —{" "}
+                      {item.reasoning}
+                    </small>
+                  </li>
+                ))}
+                {!repo.risk.items.length && (
+                  <li>
+                    <span>No high-confidence security flags in this window.</span>
+                  </li>
+                )}
+              </ul>
+            </div>
+          </div>
+          <FileLevel owner={repo.owner} repo={repo.repo} windowDays={windowDays} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SummaryTree({ summary, windowDays }) {
+  const [orgOpen, setOrgOpen] = useState(true);
+  const org = summary.org;
+  return (
+    <section className="summary-section">
+      <div className="summary-head">
+        <p className="eyebrow">Hierarchical digest</p>
+        <h3>
+          File → Commit → PR → Repo → Org
+        </h3>
+        <small>
+          {summary.window_days}-day window · generated in {summary.generated_ms}
+          ms · expand a level only when needed
+        </small>
+      </div>
+      <div className="digest-org">
+        <button className="digest-org-head" type="button" onClick={() => setOrgOpen(!orgOpen)}>
+          <span>{orgOpen ? "▾" : "▸"}</span>
+          <strong>Organization</strong>
+          <small>
+            {org.repos} repos · {org.totals.commits} commits ·{" "}
+            {org.totals.prs} PRs ({org.totals.mergedPrs} merged,{" "}
+            {org.totals.openPrs} open) · {org.totals.openIssues} open issues ·{" "}
+            {org.totals.risky} risky
+          </small>
+        </button>
+        {orgOpen && (
+          <div className="digest-org-body">
+            <div className="digest-grid org-grid">
+              <div className="digest-card">
+                <h4>Open vs merged</h4>
+                <SummaryRow label="Open PRs" value={org.open_vs_merged.open} />
+                <SummaryRow label="Merged PRs" value={org.open_vs_merged.merged} />
+                <SummaryRow
+                  label="Open/merged ratio"
+                  value={org.open_vs_merged.ratio ?? "—"}
+                />
+              </div>
+              <div className="digest-card">
+                <h4>Top contributors</h4>
+                {org.top_contributors.map((contributor) => (
+                  <SummaryRow
+                    key={contributor.login}
+                    label={contributor.login}
+                    value={contributor.count}
+                  />
+                ))}
+              </div>
+              <div className="digest-card">
+                <h4>Risky changes</h4>
+                <ul className="digest-list">
+                  {org.risky_items.slice(0, 10).map((item, index) => (
+                    <li key={`${item.repo}-${item.number}-${index}`}>
+                      <span>
+                        {item.repo} #{item.number} {item.title}
+                      </span>
+                      <small>
+                        {item.category} · {Math.round(item.confidence * 100)}%
+                      </small>
+                    </li>
+                  ))}
+                  {!org.risky_items.length && (
+                    <li>
+                      <span>No high-confidence flags.</span>
+                    </li>
+                  )}
+                </ul>
+              </div>
+            </div>
+            <div className="digest-repos">
+              {(summary.repos || []).map((repo) => (
+                <RepoDigest repo={repo} windowDays={windowDays} key={`${repo.owner}/${repo.repo}`} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function App() {
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("repoguardian-theme");
@@ -3633,6 +4069,7 @@ function App() {
               <EmptyState>No repositories match your search.</EmptyState>
             )}
           </section>
+          <TrendsSection />
         </main>
       )}
     </div>

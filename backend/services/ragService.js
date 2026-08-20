@@ -48,8 +48,21 @@ function indexDocuments(owner, repo, items) {
   });
 }
 
-function searchDocuments(owner, repo, question, limit = 8) {
-  return runBridge({ operation: "query", owner, repo, question, limit }, 12000).catch((error) => {
+/** Metadata-first retrieval: query the lightweight "meta" tier by default
+ * (titles, authors, files changed) — full bodies/diffs only when
+ * `tier: "full"` is requested. since/until are epoch-seconds windows so
+ * "last 30 days" never loads all history. */
+function searchDocuments(owner, repo, question, limit = 8, options = {}) {
+  return runBridge({
+    operation: "query",
+    owner,
+    repo,
+    question,
+    limit,
+    tier: options.tier || "meta",
+    since: options.since ?? undefined,
+    until: options.until ?? undefined,
+  }, 12000).catch((error) => {
     console.error("RAG retrieval failed:", error.message);
     return { hits: [], error: error.message };
   });

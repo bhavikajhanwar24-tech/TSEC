@@ -79,6 +79,7 @@ app.use("/api/webhooks", webhookRoutes);
 app.use("/api/issues", escalationRoutes);
 app.use("/api", apiRoutes);
 app.use("/api/agents", agentRoutes);
+app.use("/api/trends", require("./routes/trends"));
 app.get("/health", (req, res) => res.json({ ok: true }));
 const sweepService = require("./services/sweepService");
 sweepService.startScheduler();

@@ -113,6 +113,56 @@ async function githubIssueAction(owner, repo, number, token, method, body) {
   if (!response.ok) throw new Error(`GitHub issue action failed (${response.status})`);
 }
 
+const epochSeconds = (iso) => (iso ? Math.floor(new Date(iso).getTime() / 1000) : undefined);
+
+/** Index a PR's file-level diff chunks into the vector store (metadata-first):
+ * "meta" tier carries lightweight records (file paths, author, state, times)
+ * so "which PRs touched auth/ last month?" answers instantly; "full" tier
+ * carries the per-file patches for deep inspection on demand. Best-effort:
+ * never blocks or fails the webhook. */
+async function indexPrFiles(owner, repo, pr, token) {
+  if (!pr?.number) return;
+  const headers = { Authorization: `Bearer ${token || process.env.GITHUB_TOKEN}`, Accept: "application/vnd.github+json", "User-Agent": "RepoGuardian" };
+  const created = epochSeconds(pr.created_at) || epochSeconds(pr.updated_at);
+  const updated = epochSeconds(pr.updated_at) || created;
+  try {
+    const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pr.number}/files?per_page=100`, { headers });
+    if (!response.ok) return;
+    const files = (await response.json()).slice(0, 50);
+    const full = [];
+    const meta = [];
+    for (const file of files) {
+      const patch = String(file.patch || "");
+      const metaText = `PR #${pr.number} ${pr.title || ""} changed file ${file.filename} (${file.status || "modified"}, +${file.additions || 0}/-${file.deletions || 0}) by ${pr.user?.login || "unknown"}`;
+      const metaId = `prfile-${pr.number}-${file.sha || file.filename}`;
+      meta.push({
+        id: metaId,
+        text: metaText,
+        metadata: {
+          kind: "file", number: pr.number, file: file.filename, status: file.status || "modified",
+          additions: file.additions || 0, deletions: file.deletions || 0,
+          author: pr.user?.login || "unknown", state: pr.state || "open",
+          created_ts: created, updated_ts: updated,
+          source: `PR #${pr.number} ${file.filename}`,
+        },
+        tier: "meta",
+      });
+      if (patch) {
+        full.push({
+          id: `${metaId}-diff`,
+          text: `PR #${pr.number} diff ${file.filename} (${file.status}):\n${patch.slice(0, 4000)}`,
+          metadata: { kind: "pr_diff", number: pr.number, file: file.filename, author: pr.user?.login || "unknown", created_ts: created, updated_ts: updated, source: `PR #${pr.number} diff ${file.filename}` },
+          tier: "full",
+        });
+      }
+    }
+    if (meta.length) indexDocuments(owner, repo, meta);
+    if (full.length) indexDocuments(owner, repo, full);
+  } catch (error) {
+    console.error(`PR diff indexing failed for ${owner}/${repo}#${pr.number}:`, error.message);
+  }
+}
+
 async function runAllAgents(issue, repository, record, token = process.env.GITHUB_TOKEN, selectedAgents = null) {
   const owner = repository.owner.login;
   const repo = repository.name;
@@ -306,7 +356,7 @@ router.post(["/github", "/"], async (req, res) => {
     indexDocuments(repository.owner.login, repository.name, (req.body.commits || []).map((commit) => ({
       id: `commit-${commit.id}`,
       text: `Commit ${commit.id}: ${commit.message || ""}\nAuthor: ${commit.author?.name || commit.author?.username || "unknown"}\nURL: ${commit.url || ""}`,
-      metadata: { kind: "commit", sha: commit.id, source: `Commit ${commit.id?.slice(0, 7) || "unknown"}` },
+      metadata: { kind: "commit", sha: commit.id, author: commit.author?.username || commit.author?.name || "unknown", created_ts: epochSeconds(commit.timestamp), updated_ts: epochSeconds(commit.timestamp), source: `Commit ${commit.id?.slice(0, 7) || "unknown"}` },
     })));
     return res.status(202).json({ accepted: true, processed: false, indexed: true, commits: (req.body.commits || []).length });
   }
@@ -321,7 +371,15 @@ router.post(["/github", "/"], async (req, res) => {
   indexDocuments(repository.owner.login, repository.name, [{
     id: `github-${issue.id || issue.number}`,
     text: `${issue.pull_request ? "Pull request" : "Issue"} #${issue.number}: ${issue.title || ""}\n${issue.body || ""}\nState: ${issue.state || ""}`,
-    metadata: { kind: issue.pull_request ? "pr" : "issue", number: issue.number, state: issue.state || "", source: `${issue.pull_request ? "PR" : "Issue"} #${issue.number}` },
+    metadata: {
+      kind: issue.pull_request ? "pr" : "issue",
+      number: issue.number,
+      state: issue.state || "",
+      author: issue.user?.login || "unknown",
+      created_ts: epochSeconds(issue.created_at),
+      updated_ts: epochSeconds(issue.updated_at),
+      source: `${issue.pull_request ? "PR" : "Issue"} #${issue.number}`,
+    },
   }]);
 
   if (commentEvent) {
@@ -329,7 +387,14 @@ router.post(["/github", "/"], async (req, res) => {
     indexDocuments(repository.owner.login, repository.name, [{
       id: `github-comment-${comment.id || req.get("x-github-delivery")}`,
       text: `Comment on ${issue.pull_request ? "PR" : "Issue"} #${issue.number} by ${comment.user?.login || req.body.sender?.login || "unknown"}:\n${comment.body || ""}`,
-      metadata: { kind: "comment", number: issue.number, actor: comment.user?.login || req.body.sender?.login || "unknown", source: `${issue.pull_request ? "PR" : "Issue"} #${issue.number} comment` },
+      metadata: {
+        kind: "comment",
+        number: issue.number,
+        actor: comment.user?.login || req.body.sender?.login || "unknown",
+        created_ts: epochSeconds(comment.created_at),
+        updated_ts: epochSeconds(comment.created_at),
+        source: `${issue.pull_request ? "PR" : "Issue"} #${issue.number} comment`,
+      },
     }]);
   }
 
@@ -367,6 +432,7 @@ router.post(["/github", "/"], async (req, res) => {
           record.completedAt = new Date().toISOString();
         },
       });
+      indexPrFiles(repository.owner.login, repository.name, req.body.pull_request, process.env.GITHUB_TOKEN);
     }
     return res.status(202).json({ accepted: true, processed: true, indexed: true, issue: issue.number, planner: true });
   }
