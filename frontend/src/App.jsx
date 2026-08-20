@@ -781,11 +781,7 @@ function HealthTrendDetail({ result }) {
       : deriveHealthScore(result.trends || []);
   const healthStatus =
     result.health_status ||
-    (healthScore >= 80
-      ? "Healthy"
-      : healthScore >= 60
-        ? "Watch"
-        : "Declining");
+    (healthScore >= 80 ? "Healthy" : healthScore >= 60 ? "Watch" : "Declining");
   const responseTrend = (result.trends || []).find(
     (t) => t.metric === "time_to_first_response_days",
   );
@@ -2316,7 +2312,10 @@ function RepositoryTabDashboard({
             <p className="eyebrow">People behind the code</p>
             <h2>Contributors</h2>
           </div>
-          <span className="count-label">{contributors.length} people{contributorsPending ? " · syncing" : ""}</span>
+          <span className="count-label">
+            {contributors.length} people
+            {contributorsPending ? " · syncing" : ""}
+          </span>
         </div>
         {contributors.map((contributor, index) => (
           <ContributorRow
@@ -2325,7 +2324,11 @@ function RepositoryTabDashboard({
           />
         ))}
         {!contributors.length && (
-          <EmptyState>{contributorsPending ? "GitHub is preparing contributor statistics. Check again shortly." : "No contributor data found."}</EmptyState>
+          <EmptyState>
+            {contributorsPending
+              ? "GitHub is preparing contributor statistics. Check again shortly."
+              : "No contributor data found."}
+          </EmptyState>
         )}
       </div>
     ),
