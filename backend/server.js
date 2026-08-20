@@ -36,7 +36,8 @@ app.use(
 // Persistent sessions in Postgres when DATABASE_URL is configured, so logins
 // survive server restarts and redeploys. Falls back to in-memory otherwise.
 let sessionStore;
-if (process.env.DATABASE_URL) {
+const databaseUrl = process.env.DATABASE_URL;
+if (databaseUrl && !databaseUrl.startsWith("your_")) {
   const PgSession = require("connect-pg-simple")(session);
   sessionStore = new PgSession({
     conString: process.env.DATABASE_URL,

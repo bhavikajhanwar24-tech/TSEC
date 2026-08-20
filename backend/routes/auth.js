@@ -44,6 +44,9 @@ function isValidOAuthState(state) {
 }
 
 router.get("/github", (req, res) => {
+  if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+    return res.status(500).send("GitHub OAuth is not configured on the backend");
+  }
   const state = createOAuthState();
 
   const params = new URLSearchParams({
@@ -88,26 +91,31 @@ router.get("/github/callback", async (req, res) => {
 
     const data = await tokenRes.json();
     if (!data.access_token) {
-      return res.status(400).send("Failed to exchange code for token");
+      console.error("GitHub token exchange failed:", tokenRes.status, data);
+      return res.status(400).send(`GitHub token exchange failed: ${data.error_description || data.error || "missing access token"}`);
     }
 
     const userRes = await fetch(`${GITHUB_API}/user`, {
       headers: githubHeaders(data.access_token),
     });
     const user = await userRes.json();
+    if (!userRes.ok) {
+      console.error("GitHub user lookup failed:", userRes.status, user);
+      return res.status(502).send("GitHub user lookup failed");
+    }
 
     req.session.githubToken = data.access_token;
     req.session.githubUser = user;
     req.session.save((err) => {
       if (err) {
         console.error("OAuth session save error:", err);
-        return res.status(500).send("OAuth login failed");
+        return res.status(500).send(`OAuth session could not be saved: ${err.message}`);
       }
       res.redirect(process.env.FRONTEND_URL || "/");
     });
   } catch (err) {
     console.error("OAuth callback error:", err);
-    res.status(500).send("OAuth login failed");
+    res.status(500).send(`OAuth callback failed: ${err.message}`);
   }
 });
 
