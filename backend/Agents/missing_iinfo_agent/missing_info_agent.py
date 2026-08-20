@@ -306,9 +306,16 @@ def _comment_context(comments: List[Dict[str, Any]]) -> str:
 
 # Loose patterns that treat a reporter's reply comment as covering a field.
 # Comments usually answer in plain prose without template headings, so the
-# strict section scanner cannot credit them on its own.
+# strict section scanner cannot credit them on their own.
+_OS_RE = re.compile(
+    r"\b(?:windows(?:\s*\d+)?|mac(?:os)?|os\s*x|linux|ubuntu|debian|fedora|arch|manjaro|"
+    r"pop[_-]?os|mint|centos|rhel|alpine|gentoo|android|ios|iphone|ipad|chrome(?:os)?|"
+    r"firefox|safari|edge)\b",
+    re.IGNORECASE,
+)
+
 COMMENT_COVERAGE = {
-    "os": r"\b(?:windows(?:\s*\d+)?|mac(?:os)?|linux|ubuntu|debian|fedora|android|ios|iphone|ipad|chrome|firefox|safari)\b",
+    "os": _OS_RE.pattern,
     "version": r"\bv?\d+\.\d+(?:\.\d+)?\b",
     "reproduction_steps": r"(?i)(?:steps?\s*[:=]|\bto reproduce\b|\breproduce[d]?\b|\brepro\b|^\s*\d+[.)])",
     "expected_actual": r"(?i)\b(?:expected|actual(?:ly)?|instead|but got|should have)\b",
@@ -644,20 +651,120 @@ def _detail_for(field: str) -> str:
     return labels.get(field, f"{field} not mentioned")
 
 
-def _draft_comment(issue_type: str, missing: List[str]) -> str:
-    questions = {
-        "os": "What operating system and version are you using?",
-        "version": "What app, package, or project version is affected?",
-        "reproduction_steps": "What exact steps reproduce the problem?",
-        "expected_actual": "What did you expect to happen, and what happened instead?",
-        "use_case": "What use case or problem would this feature solve?",
-        "expected_behavior": "What behavior or outcome should the feature provide?",
-        "context": "What additional context would help us understand the situation?",
-    }
-    points = [f"{index}. {questions[field]}" for index, field in enumerate(missing, 1) if field in questions]
-    if not points:
-        points = [f"{index}. {field.replace('_', ' ')} not mentioned" for index, field in enumerate(missing, 1)]
-    if issue_type == "bug":
+# Two phrasings per field: the first is used on the initial ask, the second on
+# follow-ups so the reporter is never re-sent the identical question.
+_QUESTION_BANK = {
+    "os": (
+        "What operating system and version are you using?",
+        "Which operating system are you on?",
+    ),
+    "version": (
+        "What app, package, or project version is affected?",
+        "Which version of the app or package is affected?",
+    ),
+    "reproduction_steps": (
+        "What exact steps reproduce the problem?",
+        "Could you walk me through the exact steps that trigger it?",
+    ),
+    "expected_actual": (
+        "What did you expect to happen, and what happened instead?",
+        "What did you expect to see, and what actually happened?",
+    ),
+    "use_case": (
+        "What use case or problem would this feature solve?",
+        "What problem are you trying to solve with this feature?",
+    ),
+    "expected_behavior": (
+        "What behavior or outcome should the feature provide?",
+        "What should the feature do once it's implemented?",
+    ),
+    "context": (
+        "What additional context would help us understand the situation?",
+        "Is there any extra context (environment, logs, screenshots) that would help?",
+    ),
+    "logs": (
+        "Can you share the relevant logs or console output?",
+        "Could you attach the error logs or stack trace?",
+    ),
+    "error_message": (
+        "Can you include the exact error message?",
+        "What does the error message say exactly?",
+    ),
+}
+
+
+def _provided_evidence(state: AgentState) -> Dict[str, str]:
+    """What the reporter has actually told us in their reply comments, used to
+    acknowledge their answers instead of re-asking. Question comments (our own
+    previous follow-ups) never count."""
+    comments = (state.get("issue") or {}).get("comments") or []
+    text = " ".join(
+        comment.get("body") or "" for comment in comments
+        if not _is_question_comment(comment.get("body") or "")
+    )
+    evidence: Dict[str, str] = {}
+    os_match = _OS_RE.search(text)
+    if os_match:
+        evidence["os"] = os_match.group(0).strip().title()
+    version_match = re.search(r"\bv?\d+\.\d+(?:\.\d+)?\b", text)
+    if version_match:
+        evidence["version"] = version_match.group(0).lstrip("v")
+    for field in ("reproduction_steps", "expected_actual", "use_case",
+                  "expected_behavior", "logs", "error_message", "context"):
+        if re.search(COMMENT_COVERAGE[field], text, re.MULTILINE | re.IGNORECASE):
+            evidence[field] = field
+    return evidence
+
+
+def _draft_comment(state: AgentState, missing: List[str]) -> str:
+    """Context-aware follow-up comment: acknowledges what the reporter already
+    provided and asks only for what is still genuinely missing, varying the
+    phrasing on follow-ups instead of re-sending the same canned questions."""
+    issue_type = state.get("issue_type", "other")
+    comments = (state.get("issue") or {}).get("comments") or []
+    follow_up = bool(comments)
+    evidence = _provided_evidence(state)
+
+    ack = []
+    if evidence.get("os") and evidence.get("version"):
+        ack.append(f"you're on {evidence['os']} with version {evidence['version']}")
+    elif evidence.get("os"):
+        ack.append(f"you're on {evidence['os']}")
+    elif evidence.get("version"):
+        ack.append(f"version {evidence['version']}")
+    if "reproduction_steps" in evidence:
+        ack.append("the reproduction steps")
+    if "expected_actual" in evidence:
+        ack.append("what you expected vs. what happened")
+    if "use_case" in evidence:
+        ack.append("the use case")
+    if "expected_behavior" in evidence:
+        ack.append("the expected behavior")
+    if "logs" in evidence:
+        ack.append("the logs")
+    if "error_message" in evidence:
+        ack.append("the error message")
+    if "context" in evidence:
+        ack.append("additional context")
+
+    variant = 1 if follow_up else 0
+    points = []
+    for index, field in enumerate(missing, 1):
+        bank = _QUESTION_BANK.get(field)
+        if bank:
+            points.append(f"{index}. {bank[min(variant, len(bank) - 1)]}")
+        else:
+            points.append(f"{index}. {field.replace('_', ' ')} not mentioned")
+
+    if follow_up:
+        if ack:
+            intro = (
+                "Thanks — that helps. I can see " + ", ".join(ack)
+                + ". To continue, could you also provide the following?"
+            )
+        else:
+            intro = "Thanks for the follow-up. To continue, could you provide the following?"
+    elif issue_type == "bug":
         intro = "Thanks for the report. I can continue once you provide the following details:"
     elif issue_type == "feature":
         intro = "Thanks for the suggestion. To evaluate it, please provide the following details:"
@@ -780,7 +887,7 @@ def draft_follow_up(state: AgentState) -> AgentState:
         for index, field in enumerate(missing)
         if field in to_ask
     ]
-    comment = _draft_with_llm(state, details_to_ask) or _draft_comment(issue_type, to_ask)
+    comment = _draft_with_llm(state, details_to_ask) or _draft_comment(state, to_ask)
     return _record("needs-info", to_ask, details_to_ask, comment)
 
 
