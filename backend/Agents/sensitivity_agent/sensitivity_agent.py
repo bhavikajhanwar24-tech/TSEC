@@ -160,7 +160,10 @@ _RAW_HEADERS = {**_HEADERS, "Accept": "application/vnd.github.raw+json"}
 
 def _gh_get(url: str, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None) -> Any:
     resp = requests.get(url, headers=headers or _HEADERS, params=params, timeout=30)
-    if resp.status_code == 404:
+    if resp.status_code in (403, 404):
+        # 404: nothing to see. 403: token lacks permission for this endpoint
+        # (e.g. dependabot alerts need security_events read) — treat as no data
+        # rather than failing the whole sensitivity pipeline.
         return None
     resp.raise_for_status()
     return resp.json()
