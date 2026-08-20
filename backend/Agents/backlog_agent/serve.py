@@ -125,6 +125,9 @@ def main():
                 "analysis_results": [],
                 "current_index": 0,
                 "summary_report": "",
+                "owner": owner,
+                "repo": repo,
+                "memory_context": "",
             }
         )
 

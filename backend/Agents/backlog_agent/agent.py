@@ -1,10 +1,17 @@
+import json
 import os
+import sys
 from typing import List, Dict, Any, TypedDict, Literal
 from dotenv import load_dotenv
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field
+
+COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common")
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+import memory_store  # noqa: E402  (shared persistent Chroma memory)
 
 # Load environment variables (shared backend .env, then optional local .env)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +35,9 @@ class AgentState(TypedDict):
     analysis_results: List[Dict[str, Any]]
     current_index: int
     summary_report: str
+    owner: str
+    repo: str
+    memory_context: str
 
 # System prompt template for analyzing issues
 prompt_template = ChatPromptTemplate.from_messages([
@@ -45,6 +55,9 @@ Issue to Analyze:
 
 Comment History (in chronological order):
 {comment_history}
+
+Similar past issues and how they were classified (from project memory, optional context):
+{memory_context}
 
 Please analyze this issue step-by-step:
 1. Determine if the issue is currently blocked on the reporter (e.g., maintainer asked for a reproduction/minimal repro/logs/more info, and the reporter hasn't replied yet) vs. blocked on the maintainer (e.g., reporter provided feedback or opened a bug and no maintainer has replied in a timely manner).
@@ -73,7 +86,10 @@ def load_norms_node(state: AgentState) -> Dict[str, Any]:
     return {
         "repo_norms": norms,
         "current_index": 0,
-        "analysis_results": []
+        "analysis_results": [],
+        "memory_context": state.get("memory_context", ""),
+        "owner": state.get("owner", ""),
+        "repo": state.get("repo", ""),
     }
 
 def run_heuristic_analysis(issue: Dict[str, Any], repo_norms: Dict[str, Any]) -> Dict[str, Any]:
@@ -159,6 +175,25 @@ def analyze_issue_node(state: AgentState) -> Dict[str, Any]:
         
     if not comment_history_str:
         comment_history_str = "(No comments on this issue yet)"
+
+    # Retrieve similar past issues from the shared project memory so the
+    # analysis can reference how comparable stale issues were handled.
+    memory_context = state.get("memory_context", "")
+    owner = state.get("owner", "")
+    repo = state.get("repo", "")
+    if not memory_context and owner and repo:
+        try:
+            embedder = memory_store.build_embedder()
+            query_text = f"{issue.get('title', '')}\n{issue.get('description', '')}"
+            hits = memory_store.retrieve(owner, repo, embedder.embed_query(query_text), k=3, where={"kind": "issue"})
+            memory_context = "\n".join(
+                f"- issue #{h['metadata'].get('number', '?')}: "
+                f"blocked_by={h['metadata'].get('blocked_by', '?')}, "
+                f"action={h['metadata'].get('action_recommendation', '?')} — {h['text'][:160]}"
+                for h in hits
+            ) or "(no similar issues in memory yet)"
+        except Exception:
+            memory_context = "(memory unavailable)"
         
     api_key = os.getenv("NVIDIA_API_KEY")
     is_mock = not api_key or api_key == "your_nvidia_api_key_here"
@@ -184,7 +219,8 @@ def analyze_issue_node(state: AgentState) -> Dict[str, Any]:
                 issue_title=issue.get("title"),
                 last_activity_days=issue.get("last_activity_days"),
                 issue_description=issue.get("description", "(No description)"),
-                comment_history=comment_history_str
+                comment_history=comment_history_str,
+                memory_context=memory_context
             )
             
             analysis_pydantic = structured_llm.invoke(prompt)
@@ -203,13 +239,42 @@ def analyze_issue_node(state: AgentState) -> Dict[str, Any]:
     if is_mock:
         print(f"[INFO] Analyzing Issue #{issue.get('number')} using heuristic analysis rules...")
         analysis = run_heuristic_analysis(issue, repo_norms)
-        
+
+    # Remember this issue and its classification in the shared project memory
+    # so future sweeps can reference comparable cases. Never blocks.
+    if owner and repo:
+        try:
+            embedder = memory_store.build_embedder()
+            issue_text = f"{issue.get('title', '')}\n{issue.get('description', '')}\n{comment_history_str}"
+            memory_store.ingest(
+                owner,
+                repo,
+                [
+                    {
+                        "id": f"issue-{issue.get('number', '')}",
+                        "text": issue_text,
+                        "embedding": embedder.embed_query(issue_text),
+                        "metadata": {
+                            "kind": "issue",
+                            "number": issue.get("number", 0),
+                            "state": "open",
+                            "blocked_by": analysis.get("blocked_by", "none"),
+                            "action_recommendation": analysis.get("action_recommendation", "keep_open"),
+                            "last_activity_days": issue.get("last_activity_days", 0),
+                        },
+                    }
+                ],
+            )
+        except Exception:
+            pass
+
     new_results = list(state.get("analysis_results", []))
     new_results.append(analysis)
     
     return {
         "analysis_results": new_results,
-        "current_index": idx + 1
+        "current_index": idx + 1,
+        "memory_context": memory_context,
     }
 
 def router_edge(state: AgentState) -> str:

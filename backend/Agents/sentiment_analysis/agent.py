@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 from typing import List, Dict, Any, TypedDict
 from dotenv import load_dotenv
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
@@ -7,6 +8,11 @@ from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field
 import requests
+
+COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common")
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+import memory_store  # noqa: E402  (shared persistent Chroma memory)
 
 # Load environment variables (shared backend .env, then optional local .env)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -192,17 +198,41 @@ def analyze_activity_tone_node(state: SentimentState) -> Dict[str, Any]:
     }
 
 def search_precedents_node(state: SentimentState) -> Dict[str, Any]:
-    """Retrieves real historical precedents from the repo via GitHub search:
-    closed PRs/issues with titles overlapping the current dispute's keywords.
-    No data here is hardcoded — if retrieval is impossible it returns no
-    precedents rather than fabricating any."""
+    """Retrieves real historical precedents from the repo via GitHub search
+    (closed PRs/issues with titles overlapping the current dispute's keywords)
+    PLUS the shared project memory: past discussions this agent already
+    analyzed, stored with their resolutions. No data is hardcoded — if
+    retrieval is impossible it returns no precedents rather than fabricating."""
     pr = state["pr_or_issue"]
     owner = state.get("owner")
     repo = state.get("repo")
     token = os.environ.get("GITHUB_TOKEN", "")
+    precedents = []
+
+    if owner and repo:
+        try:
+            embedder = memory_store.build_embedder()
+            thread_text = "\n".join(
+                [pr.get("title", ""), pr.get("description", "")]
+                + [c.get("body", "") for c in pr.get("comments", [])]
+            )
+            for hit in memory_store.retrieve(owner, repo, embedder.embed_query(thread_text), k=3, where={"kind": "discussion"}):
+                meta = hit["metadata"]
+                precedents.append(
+                    {
+                        "id": meta.get("number", "mem"),
+                        "year": (meta.get("created_at") or "")[:4] or "past",
+                        "title": meta.get("title") or hit["text"][:80],
+                        "dispute": hit["text"][:300],
+                        "resolution": meta.get("resolution") or f"Analyzed with sentiment score {meta.get('sentiment_score', '?')}.",
+                        "source": "memory",
+                    }
+                )
+        except Exception:
+            pass
 
     if not (owner and repo and token):
-        return {"rag_precedents": []}
+        return {"rag_precedents": precedents}
 
     title_words = [w for w in re.findall(r"[a-z0-9]+", pr.get("title", "").lower()) if w not in PRECEDENT_STOPWORDS]
     keywords = " ".join(title_words[:5]) or "bug"
@@ -217,9 +247,9 @@ def search_precedents_node(state: SentimentState) -> Dict[str, Any]:
         response.raise_for_status()
         items = [i for i in response.json().get("items", []) if i["number"] != pr.get("number")]
     except (requests.RequestException, ValueError):
-        return {"rag_precedents": []}
+        return {"rag_precedents": precedents}
 
-    precedents = []
+    seen = {p["id"] for p in precedents}
     for item in items[:3]:
         body = item.get("body") or "(no description)"
         resolution = f"Closed on {item.get('closed_at', 'unknown')[:10]} as {item.get('state_reason') or item.get('state')}."
@@ -229,6 +259,9 @@ def search_precedents_node(state: SentimentState) -> Dict[str, Any]:
                 resolution += f" Last comment: {comments[-1].get('body', '')[:200]}"
         except requests.RequestException:
             pass
+        if item["number"] in seen:
+            continue
+        seen.add(item["number"])
         precedents.append(
             {
                 "id": item["number"],
@@ -236,9 +269,10 @@ def search_precedents_node(state: SentimentState) -> Dict[str, Any]:
                 "title": item["title"],
                 "dispute": body[:300],
                 "resolution": resolution,
+                "source": "github",
             }
         )
-    return {"rag_precedents": precedents}
+    return {"rag_precedents": precedents[:3]}
 
 def synthesize_findings_node(state: SentimentState) -> Dict[str, Any]:
     """Compares the current dispute analysis with past RAG precedents and writes a report."""
@@ -306,6 +340,41 @@ def synthesize_findings_node(state: SentimentState) -> Dict[str, Any]:
             "recommended_action": rec_action
         }
         
+    # Remember this discussion and its outcome in the shared project memory so
+    # future runs treat it as resolved precedent. Never blocks.
+    owner, repo = state.get("owner"), state.get("repo")
+    if owner and repo:
+        try:
+            embedder = memory_store.build_embedder()
+            thread_text = "\n".join(
+                [pr.get("title", ""), pr.get("description", "")]
+                + [c.get("body", "") for c in pr.get("comments", [])]
+            )
+            memory_store.ingest(
+                owner,
+                repo,
+                [
+                    {
+                        "id": f"discussion-{pr.get('number', '')}",
+                        "text": thread_text,
+                        "embedding": embedder.embed_query(thread_text),
+                        "metadata": {
+                            "kind": "discussion",
+                            "number": pr.get("number", 0),
+                            "title": pr.get("title", ""),
+                            "state": pr.get("state", "open"),
+                            "is_contentious": bool(analysis.get("is_contentious", False)),
+                            "sentiment_score": float(analysis.get("sentiment_score", 0.0)),
+                            "needs_human_judgment": bool(synthesis.get("needs_human_judgment", False)),
+                            "resolution": (synthesis.get("recommended_action") or synthesis.get("summary") or "")[:300],
+                            "created_at": pr.get("created_at", ""),
+                        },
+                    }
+                ],
+            )
+        except Exception:
+            pass
+
     # Generate final report
     report = "# Contention & Sentiment Analysis Sweep\n\n"
     report += f"### PR/Issue #{pr.get('number')}: \"{pr.get('title')}\"\n"
