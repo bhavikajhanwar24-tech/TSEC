@@ -215,11 +215,10 @@ def _gh_get(url: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str,
 
 
 def fetch_corpus(owner: str, repo: str, limit: int = 200) -> List[Dict[str, Any]]:
-    """Fetch open and closed issues (plus PRs are excluded by issues?state=all
-    filter below) so the vector store covers the whole history, not just open."""
+    """Fetch only open issues and exclude pull requests from the corpus."""
     url = f"{_API}/repos/{owner}/{repo}/issues"
-    raw = _gh_get(url, params={"state": "all", "per_page": 100, "sort": "updated", "direction": "desc"})
-    issues = [i for i in raw if "pull_request" not in i]  # exclude PRs, keep real issues
+    raw = _gh_get(url, params={"state": "open", "per_page": 100, "sort": "updated", "direction": "desc"})
+    issues = [i for i in raw if "pull_request" not in i and i.get("state") == "open"]
     for issue in issues[:limit]:
         comments = _gh_get(issue["comments_url"])
         issue["comments"] = [{"body": c["body"], "user": c["user"]["login"]} for c in comments]
@@ -325,7 +324,8 @@ def node_embed_and_search(state: AgentState) -> AgentState:
     query_vec = embedder.embed_query(state["searchable_text"])
     incoming_number = state["issue"].get("number")
     candidates = [
-        c for c in store.search(query_vec, k=10) if c["issue"].get("number") != incoming_number
+        c for c in store.search(query_vec, k=10)
+        if c["issue"].get("number") != incoming_number and c["issue"].get("state") == "open"
     ]
 
     # Merge with the persistent project memory: similar PAST issues (with their
@@ -337,7 +337,7 @@ def node_embed_and_search(state: AgentState) -> AgentState:
         for hit in mem_hits:
             meta = hit["metadata"]
             number = meta.get("number")
-            if not number or number == incoming_number or number in seen:
+            if not number or number == incoming_number or number in seen or meta.get("state") != "open":
                 continue
             seen.add(number)
             candidates.append(
