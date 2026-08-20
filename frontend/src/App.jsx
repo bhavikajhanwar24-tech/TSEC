@@ -667,7 +667,14 @@ function projectSeries(values, points = 3) {
   );
 }
 
-function BacklogFlowChart({ labels, opened, closed, backlog, color, releases }) {
+function BacklogFlowChart({
+  labels,
+  opened,
+  closed,
+  backlog,
+  color,
+  releases,
+}) {
   const w = 280;
   const h = 100;
   const pad = 8;
@@ -752,7 +759,14 @@ function BacklogFlowChart({ labels, opened, closed, backlog, color, releases }) 
           opacity="0.45"
         />
         {netPts.map(([x, y], i) => (
-          <circle key={`n${i}`} cx={x.toFixed(1)} cy={y.toFixed(1)} r="1.6" fill="#ffffff" opacity="0.5">
+          <circle
+            key={`n${i}`}
+            cx={x.toFixed(1)}
+            cy={y.toFixed(1)}
+            r="1.6"
+            fill="#ffffff"
+            opacity="0.5"
+          >
             <title>{`${labels[i]}: net ${net[i] >= 0 ? "+" : ""}${net[i]} issues`}</title>
           </circle>
         ))}
@@ -819,8 +833,8 @@ function ContributorStackChart({ labels, active, fresh }) {
   const pad = 8;
   const safeActive = (active || []).map((v) => Number(v) || 0);
   const safeFresh = (fresh || []).map((v) => Number(v) || 0);
-  const safeReturning = safeActive.map(
-    (v, i) => Math.max(0, v - (safeFresh[i] || 0)),
+  const safeReturning = safeActive.map((v, i) =>
+    Math.max(0, v - (safeFresh[i] || 0)),
   );
   const max = Math.max(...safeActive, 1);
   const step = (w - 2 * pad) / Math.max(1, safeActive.length - 1);
@@ -846,10 +860,22 @@ function ContributorStackChart({ labels, active, fresh }) {
       </div>
       <svg viewBox={`0 0 ${w} ${h}`} className="health-chart" role="img">
         <path d={area} fill="#a78bfa" opacity="0.18" />
-        <path d={area} fill="none" stroke="#a78bfa" strokeWidth="1" opacity="0.5" />
+        <path
+          d={area}
+          fill="none"
+          stroke="#a78bfa"
+          strokeWidth="1"
+          opacity="0.5"
+        />
         <path d={newLine} fill="none" stroke="#34d399" strokeWidth="1.6" />
         {safeActive.map((v, i) => (
-          <circle key={i} cx={xOf(i).toFixed(1)} cy={yOf(v).toFixed(1)} r="2" fill="#a78bfa">
+          <circle
+            key={i}
+            cx={xOf(i).toFixed(1)}
+            cy={yOf(v).toFixed(1)}
+            r="2"
+            fill="#a78bfa"
+          >
             <title>{`${labels[i]}: ${safeReturning[i]} returning + ${safeFresh[i]} new`}</title>
           </circle>
         ))}
@@ -930,15 +956,62 @@ function ContributorHeatmap({ rows, labels }) {
 }
 
 const METRIC_CONFIG = [
-  { key: "time_to_first_response_days", label: "Response time (days)", higherIsWorse: true, threshold: 1.5, zeroIsMissing: true },
-  { key: "backlog_size", label: "Backlog", higherIsWorse: true, threshold: 1.3 },
-  { key: "incoming_volume", label: "Opened / week", higherIsWorse: true, threshold: 1.5 },
-  { key: "issues_closed", label: "Closed / week", higherIsWorse: false, threshold: 0.67 },
-  { key: "close_open_ratio", label: "Close/open ratio", higherIsWorse: false, threshold: 0.67 },
-  { key: "duplicate_rate", label: "Duplicate %", higherIsWorse: true, threshold: 1.5 },
-  { key: "pr_merge_latency_days", label: "PR latency (days)", higherIsWorse: true, threshold: 1.5, zeroIsMissing: true },
-  { key: "active_contributors", label: "Active contributors", higherIsWorse: false, threshold: 0.67 },
-  { key: "new_contributors", label: "New contributors", higherIsWorse: false, threshold: 0.67 },
+  {
+    key: "time_to_first_response_days",
+    label: "Response time (days)",
+    higherIsWorse: true,
+    threshold: 1.5,
+    zeroIsMissing: true,
+  },
+  {
+    key: "backlog_size",
+    label: "Backlog",
+    higherIsWorse: true,
+    threshold: 1.3,
+  },
+  {
+    key: "incoming_volume",
+    label: "Opened / week",
+    higherIsWorse: true,
+    threshold: 1.5,
+  },
+  {
+    key: "issues_closed",
+    label: "Closed / week",
+    higherIsWorse: false,
+    threshold: 0.67,
+  },
+  {
+    key: "close_open_ratio",
+    label: "Close/open ratio",
+    higherIsWorse: false,
+    threshold: 0.67,
+  },
+  {
+    key: "duplicate_rate",
+    label: "Duplicate %",
+    higherIsWorse: true,
+    threshold: 1.5,
+  },
+  {
+    key: "pr_merge_latency_days",
+    label: "PR latency (days)",
+    higherIsWorse: true,
+    threshold: 1.5,
+    zeroIsMissing: true,
+  },
+  {
+    key: "active_contributors",
+    label: "Active contributors",
+    higherIsWorse: false,
+    threshold: 0.67,
+  },
+  {
+    key: "new_contributors",
+    label: "New contributors",
+    higherIsWorse: false,
+    threshold: 0.67,
+  },
 ];
 
 function median(values) {
@@ -962,8 +1035,11 @@ function metricStatus(config, series) {
   const baseMed = median(baseline);
   const recMed = median(recent);
   if (!baseMed && !recMed) return null;
-  const ratio = baseMed > 0 ? Math.min(recMed / baseMed, 10) : recMed > 0 ? 10 : 0;
-  const worse = config.higherIsWorse ? ratio >= config.threshold : ratio <= config.threshold;
+  const ratio =
+    baseMed > 0 ? Math.min(recMed / baseMed, 10) : recMed > 0 ? 10 : 0;
+  const worse = config.higherIsWorse
+    ? ratio >= config.threshold
+    : ratio <= config.threshold;
   const moved = config.higherIsWorse ? ratio > 1 : ratio < 1;
   return {
     baseline: Math.round(baseMed * 100) / 100,
@@ -974,7 +1050,9 @@ function metricStatus(config, series) {
 }
 
 function HealthTrafficTable({ labels, series }) {
-  const rows = METRIC_CONFIG.filter((config) => Array.isArray(series[config.key]) && series[config.key].length)
+  const rows = METRIC_CONFIG.filter(
+    (config) => Array.isArray(series[config.key]) && series[config.key].length,
+  )
     .map((config) => ({ config, check: metricStatus(config, series) }))
     .filter((row) => row.check);
   if (!rows.length) return null;
@@ -1022,7 +1100,10 @@ function MetricDragBars({ series, labels }) {
   const [windowWeeks, setWindowWeeks] = useState(4);
   const handlePointer = (event) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    const ratio = Math.max(
+      0,
+      Math.min(1, (event.clientX - rect.left) / rect.width),
+    );
     setWindowWeeks(Math.max(2, Math.min(6, Math.round(ratio * 4) + 2)));
   };
   const rows = METRIC_CONFIG.filter(
@@ -1079,7 +1160,11 @@ function MetricDragBars({ series, labels }) {
         const check = metricStatus(config, series);
         const status = check?.status || "healthy";
         const max = Math.max(baseline, recent, 1);
-        const colors = { healthy: "#2f9e6e", watch: "#e5a13c", declining: "#e5484d" };
+        const colors = {
+          healthy: "#2f9e6e",
+          watch: "#e5a13c",
+          declining: "#e5484d",
+        };
         return (
           <div className="drag-bar-row" key={config.key}>
             <span className="drag-bar-label">{config.label}</span>
@@ -1129,7 +1214,9 @@ function isoWeekKey(isoString) {
   if (!isoString) return "";
   const d = new Date(isoString);
   if (Number.isNaN(d.getTime())) return "";
-  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const date = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
+  );
   const dayNum = date.getUTCDay() || 7;
   date.setUTCDate(date.getUTCDate() + 4 - dayNum);
   const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
@@ -1222,7 +1309,11 @@ function HealthTrendDetail({ result }) {
     .map((release) => {
       const weekIndex = labels.indexOf(isoWeekKey(release.published_at));
       return weekIndex >= 0
-        ? { tag: release.tag, label: isoWeekKey(release.published_at), weekIndex }
+        ? {
+            tag: release.tag,
+            label: isoWeekKey(release.published_at),
+            weekIndex,
+          }
         : null;
     })
     .filter(Boolean);
@@ -1538,7 +1629,9 @@ function SweepsPanel({ owner, repo }) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const fetchStatus = () => {
-    api("/api/agents/sweeps").then(setData).catch(() => setData(null));
+    api("/api/agents/sweeps")
+      .then(setData)
+      .catch(() => setData(null));
   };
   useEffect(() => {
     fetchStatus();
@@ -1922,6 +2015,8 @@ function AgentResultDetail({ agent }) {
 }
 
 function CentralAnalysisDashboard({
+  owner,
+  repo,
   issue,
   analysis,
   agents,
@@ -1936,6 +2031,7 @@ function CentralAnalysisDashboard({
   onClose,
 }) {
   const [activeAgent, setActiveAgent] = useState("sensitivity");
+  const [showContributor, setShowContributor] = useState(false);
   const active = agents.find((agent) => agent.key === activeAgent) || agents[0];
   const running = agents.filter((agent) => agent.status === "running").length;
   const security =
@@ -1951,7 +2047,7 @@ function CentralAnalysisDashboard({
         ? "Waiting for reporter"
         : analysis?.status === "waiting_duplicate_info"
           ? "Waiting for duplicate evidence"
-        : "Running";
+          : "Running";
   return (
     <div
       className="analysis-overlay"
@@ -2009,7 +2105,10 @@ function CentralAnalysisDashboard({
                   className={active?.key === agent.key ? "active" : ""}
                   type="button"
                   key={agent.key}
-                  onClick={() => setActiveAgent(agent.key)}
+                  onClick={() => {
+                    setShowContributor(false);
+                    setActiveAgent(agent.key);
+                  }}
                 >
                   <span className={`nav-agent-icon ${agent.status}`}>
                     {agent.status === "complete"
@@ -2026,6 +2125,17 @@ function CentralAnalysisDashboard({
                   </span>
                 </button>
               ))}
+              <button
+                className={showContributor ? "active" : ""}
+                type="button"
+                onClick={() => setShowContributor(true)}
+              >
+                <span className="nav-agent-icon contributor">◎</span>
+                <span>
+                  <strong>Contributor match</strong>
+                  <small>on demand</small>
+                </span>
+              </button>
             </nav>
           </aside>
           <main className="analysis-main">
@@ -2163,91 +2273,131 @@ function CentralAnalysisDashboard({
                         <p className="eyebrow">Escalation evidence</p>
                         <h2>Urgency {Number(escalation.urgency || 0)}/100</h2>
                       </div>
-                      {escalation.isDuplicateHotspot && <span className="hotspot-badge">Duplicate hotspot</span>}
+                      {escalation.isDuplicateHotspot && (
+                        <span className="hotspot-badge">Duplicate hotspot</span>
+                      )}
                     </div>
-                    <p>{(escalation.urgencyReasons || []).join(" · ") || "Urgency is based on completed agent signals."}</p>
-                    {Number(escalation.threshold || 0.6) > 0.6 && <p className="calibration-notice">Repo calibration raised the auto-action threshold to {Math.round(Number(escalation.threshold) * 100)}% after maintainer corrections.</p>}
+                    <p>
+                      {(escalation.urgencyReasons || []).join(" · ") ||
+                        "Urgency is based on completed agent signals."}
+                    </p>
+                    {Number(escalation.threshold || 0.6) > 0.6 && (
+                      <p className="calibration-notice">
+                        Repo calibration raised the auto-action threshold to{" "}
+                        {Math.round(Number(escalation.threshold) * 100)}% after
+                        maintainer corrections.
+                      </p>
+                    )}
                     <div className="escalation-thread">
                       <strong>Issue and user discussion</strong>
-                      <p>{escalation.issue?.body || issue.body || "No issue description."}</p>
+                      <p>
+                        {escalation.issue?.body ||
+                          issue.body ||
+                          "No issue description."}
+                      </p>
                       {(escalation.timelines || []).map((timeline, index) => (
-                        <div key={`${timeline.eventType}-${index}`}><b>{timeline.actor || "user"}:</b> {timeline.body}</div>
+                        <div key={`${timeline.eventType}-${index}`}>
+                          <b>{timeline.actor || "user"}:</b> {timeline.body}
+                        </div>
                       ))}
                     </div>
                     <details className="escalation-agent-details">
                       <summary>Agent reasons and evidence</summary>
-                      {(escalation.agentRuns || []).map((run) => <DecisionRecord key={run.id} run={run} onFeedback={onFeedback} />)}
+                      {(escalation.agentRuns || []).map((run) => (
+                        <DecisionRecord
+                          key={run.id}
+                          run={run}
+                          onFeedback={onFeedback}
+                        />
+                      ))}
                     </details>
                   </section>
                 )}
-                {moderator && (
-                  <ModeratorPanel context={moderator} onAction={onModeratorAction} />
+                {showContributor ? (
+                  <section className="contributor-section">
+                    <ContributorMatchPanel
+                      owner={owner}
+                      repo={repo}
+                      issue={issue}
+                      fallbackCandidates={moderator?.suggestions}
+                      onAction={onModeratorAction}
+                    />
+                    {moderator && (
+                      <ModeratorPanel
+                        context={moderator}
+                        onAction={onModeratorAction}
+                      />
+                    )}
+                  </section>
+                ) : (
+                  <>
+                    {error && <p className="detail-error">{error}</p>}
+                    <section className="analysis-content-grid">
+                      <article className="selected-agent-card">
+                        <div className="selected-agent-heading">
+                          <div>
+                            <p className="eyebrow">Selected analysis</p>
+                            <h2>{active?.label}</h2>
+                            <p>{active?.hint}</p>
+                          </div>
+                          <span className={`agent-status ${active?.status}`}>
+                            {statusLabel(active?.status)}
+                          </span>
+                        </div>
+                        {active?.status === "running" && (
+                          <div className="agent-progress">
+                            <span />
+                          </div>
+                        )}
+                        {active?.error && (
+                          <p className="detail-error">{active.error}</p>
+                        )}
+                        {active?.result && <AgentResultDetail agent={active} />}
+                        {!active?.result && !active?.error && (
+                          <div className="waiting-detail">
+                            <span className="waiting-orbit">◌</span>
+                            <strong>Waiting for this agent to report</strong>
+                            <p>
+                              The workflow will surface its findings here as
+                              soon as they arrive.
+                            </p>
+                          </div>
+                        )}
+                      </article>
+                      <aside className="workflow-card">
+                        <div className="panel-heading">
+                          <div>
+                            <p className="eyebrow">Workflow</p>
+                            <h2>Agent activity</h2>
+                          </div>
+                          <span className="count-label">
+                            {complete} of {agents.length}
+                          </span>
+                        </div>
+                        <div className="workflow-rail">
+                          {agents.map((agent, index) => (
+                            <button
+                              className={`workflow-step ${active?.key === agent.key ? "selected" : ""}`}
+                              type="button"
+                              key={agent.key}
+                              onClick={() => setActiveAgent(agent.key)}
+                            >
+                              <span
+                                className={`workflow-step-marker ${agent.status}`}
+                              >
+                                {agent.status === "complete" ? "✓" : index + 1}
+                              </span>
+                              <span>
+                                <strong>{agent.label}</strong>
+                                <small>{statusLabel(agent.status)}</small>
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </aside>
+                    </section>
+                  </>
                 )}
-                {error && <p className="detail-error">{error}</p>}
-                <section className="analysis-content-grid">
-                  <article className="selected-agent-card">
-                    <div className="selected-agent-heading">
-                      <div>
-                        <p className="eyebrow">Selected analysis</p>
-                        <h2>{active?.label}</h2>
-                        <p>{active?.hint}</p>
-                      </div>
-                      <span className={`agent-status ${active?.status}`}>
-                        {statusLabel(active?.status)}
-                      </span>
-                    </div>
-                    {active?.status === "running" && (
-                      <div className="agent-progress">
-                        <span />
-                      </div>
-                    )}
-                    {active?.error && (
-                      <p className="detail-error">{active.error}</p>
-                    )}
-                    {active?.result && <AgentResultDetail agent={active} />}
-                    {!active?.result && !active?.error && (
-                      <div className="waiting-detail">
-                        <span className="waiting-orbit">◌</span>
-                        <strong>Waiting for this agent to report</strong>
-                        <p>
-                          The workflow will surface its findings here as soon as
-                          they arrive.
-                        </p>
-                      </div>
-                    )}
-                  </article>
-                  <aside className="workflow-card">
-                    <div className="panel-heading">
-                      <div>
-                        <p className="eyebrow">Workflow</p>
-                        <h2>Agent activity</h2>
-                      </div>
-                      <span className="count-label">
-                        {complete} of {agents.length}
-                      </span>
-                    </div>
-                    <div className="workflow-rail">
-                      {agents.map((agent, index) => (
-                        <button
-                          className={`workflow-step ${active?.key === agent.key ? "selected" : ""}`}
-                          type="button"
-                          key={agent.key}
-                          onClick={() => setActiveAgent(agent.key)}
-                        >
-                          <span
-                            className={`workflow-step-marker ${agent.status}`}
-                          >
-                            {agent.status === "complete" ? "✓" : index + 1}
-                          </span>
-                          <span>
-                            <strong>{agent.label}</strong>
-                            <small>{statusLabel(agent.status)}</small>
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </aside>
-                </section>
               </>
             )}
           </main>
@@ -2267,7 +2417,12 @@ function DecisionRecord({ run, onFeedback }) {
     if (verdict === "corrected" && !correctionDetail.trim()) return;
     setBusy(true);
     try {
-      await onFeedback({ agentRunId: run.id, verdict, correctionType, correctionDetail });
+      await onFeedback({
+        agentRunId: run.id,
+        verdict,
+        correctionType,
+        correctionDetail,
+      });
       setCorrecting(false);
       setCorrectionDetail("");
     } finally {
@@ -2275,21 +2430,99 @@ function DecisionRecord({ run, onFeedback }) {
     }
   }
   const evidence = Array.isArray(run.citedEvidence) ? run.citedEvidence : [];
-  return <article className={`decision-record ${savedFeedback?.verdict || ""}`}>
-    <div className="decision-record-heading">
-      <div><b>{run.agentName}</b><span>{run.finalAction || run.suggestedAction || "no action"} · {Math.round(Number(run.confidence || 0) * 100)}% confidence</span></div>
-      <span className="decision-status">{savedFeedback?.verdict || run.status}</span>
-    </div>
-    <p>{run.reasoning}</p>
-    {Array.isArray(run.reasoningTrace) && run.reasoningTrace.length > 0 && <ol className="reasoning-steps">{run.reasoningTrace.map((step, index) => <li key={`${run.id}-step-${index}`}>{String(step)}</li>)}</ol>}
-    {evidence.length > 0 && <div className="decision-evidence">{evidence.map((item, index) => {
-      const url = item.url || item.html_url;
-      const label = item.source || item.title || item.issue_number ? `${item.source || "Issue"}${item.issue_number ? ` #${item.issue_number}` : ""}` : String(item);
-      return url ? <a href={url} target="_blank" rel="noreferrer" key={`${run.id}-evidence-${index}`}>{label} →</a> : <span key={`${run.id}-evidence-${index}`}>{label}</span>;
-    })}</div>}
-    {!savedFeedback && <div className="decision-feedback-actions"><button type="button" className="primary-button" disabled={busy} onClick={() => submit("approved")}>Approve</button><button type="button" className="outline-button" disabled={busy} onClick={() => setCorrecting(true)}>Correct</button></div>}
-    {correcting && <div className="correction-form"><select value={correctionType} onChange={(event) => setCorrectionType(event.target.value)}><option value="evidence_weighting">Wrong evidence weighting</option><option value="threshold">Wrong threshold/action</option><option value="category">Wrong category</option></select><textarea value={correctionDetail} onChange={(event) => setCorrectionDetail(event.target.value)} placeholder="What should the agent have understood?" rows="3" /><button type="button" className="primary-button" disabled={busy || !correctionDetail.trim()} onClick={() => submit("corrected")}>Save correction</button></div>}
-  </article>;
+  return (
+    <article className={`decision-record ${savedFeedback?.verdict || ""}`}>
+      <div className="decision-record-heading">
+        <div>
+          <b>{run.agentName}</b>
+          <span>
+            {run.finalAction || run.suggestedAction || "no action"} ·{" "}
+            {Math.round(Number(run.confidence || 0) * 100)}% confidence
+          </span>
+        </div>
+        <span className="decision-status">
+          {savedFeedback?.verdict || run.status}
+        </span>
+      </div>
+      <p>{run.reasoning}</p>
+      {Array.isArray(run.reasoningTrace) && run.reasoningTrace.length > 0 && (
+        <ol className="reasoning-steps">
+          {run.reasoningTrace.map((step, index) => (
+            <li key={`${run.id}-step-${index}`}>{String(step)}</li>
+          ))}
+        </ol>
+      )}
+      {evidence.length > 0 && (
+        <div className="decision-evidence">
+          {evidence.map((item, index) => {
+            const url = item.url || item.html_url;
+            const label =
+              item.source || item.title || item.issue_number
+                ? `${item.source || "Issue"}${item.issue_number ? ` #${item.issue_number}` : ""}`
+                : String(item);
+            return url ? (
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                key={`${run.id}-evidence-${index}`}
+              >
+                {label} →
+              </a>
+            ) : (
+              <span key={`${run.id}-evidence-${index}`}>{label}</span>
+            );
+          })}
+        </div>
+      )}
+      {!savedFeedback && (
+        <div className="decision-feedback-actions">
+          <button
+            type="button"
+            className="primary-button"
+            disabled={busy}
+            onClick={() => submit("approved")}
+          >
+            Approve
+          </button>
+          <button
+            type="button"
+            className="outline-button"
+            disabled={busy}
+            onClick={() => setCorrecting(true)}
+          >
+            Correct
+          </button>
+        </div>
+      )}
+      {correcting && (
+        <div className="correction-form">
+          <select
+            value={correctionType}
+            onChange={(event) => setCorrectionType(event.target.value)}
+          >
+            <option value="evidence_weighting">Wrong evidence weighting</option>
+            <option value="threshold">Wrong threshold/action</option>
+            <option value="category">Wrong category</option>
+          </select>
+          <textarea
+            value={correctionDetail}
+            onChange={(event) => setCorrectionDetail(event.target.value)}
+            placeholder="What should the agent have understood?"
+            rows="3"
+          />
+          <button
+            type="button"
+            className="primary-button"
+            disabled={busy || !correctionDetail.trim()}
+            onClick={() => submit("corrected")}
+          >
+            Save correction
+          </button>
+        </div>
+      )}
+    </article>
+  );
 }
 
 function ModeratorPanel({ context, onAction }) {
@@ -2302,16 +2535,211 @@ function ModeratorPanel({ context, onAction }) {
     setMessage("");
     try {
       await onAction(payload);
-      setMessage(payload.undo ? "Assignment undone and issue reopened." : payload.reopen ? "Issue reopened." : `Assigned to @${payload.assignee}.`);
+      setMessage(`Assigned to @${payload.assignee}.`);
     } catch (error) {
       setMessage(error.message);
     } finally {
       setBusy(false);
     }
   }
-  const suggestions = context.suggestions || [];
-  const nextSuggestion = suggestions.find((suggestion) => suggestion.login !== assignee) || suggestions[0];
-  return <section className="moderator-panel"><div className="escalation-evidence-heading"><div><p className="eyebrow">Moderator controls</p><h3>Assign or restore ownership</h3></div><span className="count-label">GitHub source of truth</span></div><div className="moderator-actions"><select value={assignee} onChange={(event) => setAssignee(event.target.value)} disabled={busy}><option value="">Choose collaborator</option>{(context.collaborators || []).map((person) => <option value={person.login} key={person.login}>@{person.login}</option>)}</select><button type="button" className="primary-button" disabled={busy || !assignee} onClick={() => act({ assignee })}>Assign task</button><button type="button" className="outline-button" disabled={busy || !nextSuggestion} onClick={() => act({ assignee: nextSuggestion?.login })}>Assign next suggestion</button>{(context.issue?.assignees?.length > 0 || context.issue?.state === "closed") && <button type="button" className="outline-button" disabled={busy} onClick={() => act({ undo: true })}>Undo assignment</button>}{context.issue?.state === "closed" && <button type="button" className="outline-button" disabled={busy} onClick={() => act({ reopen: true })}>Reopen issue</button>}</div><div className="moderator-suggestions"><strong>Suggested people</strong>{suggestions.map((suggestion) => <button type="button" key={suggestion.login} onClick={() => setAssignee(suggestion.login)}><span>@{suggestion.login}</span><small>{suggestion.score}/100 · {suggestion.reasons.join(", ")}</small></button>)}</div>{message && <p className="detail-muted">{message}</p>}</section>;
+  const reporter = context.issue?.user?.login;
+  return (
+    <section className="moderator-panel">
+      <div className="escalation-evidence-heading">
+        <div>
+          <p className="eyebrow">Manual assignment</p>
+          <h3>Choose ownership yourself</h3>
+        </div>
+        <span className="count-label">GitHub source of truth</span>
+      </div>
+      <div className="moderator-actions">
+        <select
+          value={assignee}
+          onChange={(event) => setAssignee(event.target.value)}
+          disabled={busy}
+        >
+          <option value="">Choose collaborator</option>
+          {(context.collaborators || []).map((person) => (
+            <option value={person.login} key={person.login}>
+              @{person.login}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="primary-button"
+          disabled={busy || !assignee}
+          onClick={() => act({ assignee })}
+        >
+          Assign task
+        </button>
+        {reporter && (
+          <button
+            type="button"
+            className="outline-button"
+            disabled={busy}
+            onClick={() => act({ assignee: reporter })}
+          >
+            Assign issue creator
+          </button>
+        )}
+      </div>
+      {message && <p className="detail-muted">{message}</p>}
+    </section>
+  );
+}
+
+function ContributorMatchPanel({
+  owner,
+  repo,
+  issue,
+  fallbackCandidates,
+  onAction,
+}) {
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [assignedLogin, setAssignedLogin] = useState("");
+
+  async function findMatches() {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await api("/api/agents/contributor-match", {
+        method: "POST",
+        body: { owner, repo, issueNumber: issue.number },
+      });
+      setResult(response);
+    } catch (requestError) {
+      const fallback = (fallbackCandidates || []).map((candidate) => ({
+        login: candidate.login,
+        fit_score: candidate.score,
+        confidence: 0,
+        tech_stack_match: "Repository contributor suggestion",
+        past_similar_work: (candidate.reasons || []).join(", "),
+        median_turnaround_days: null,
+        current_load: "Live contributor history unavailable",
+        sentiment_flag: "Fallback suggestion",
+        reasoning:
+          "The deployed Contributor Agent is unavailable, so this recommendation uses the existing repository contributor signals.",
+      }));
+      if (fallback.length) {
+        setResult({
+          candidates: fallback,
+          recommended: fallback[0].login,
+          fallback: true,
+        });
+        setError(
+          "Live Contributor Agent unavailable; showing repository suggestions.",
+        );
+      } else {
+        setError(requestError.message);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function assign(login) {
+    setAssignedLogin(login);
+    setError("");
+    try {
+      await onAction({ assignee: login });
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setAssignedLogin("");
+    }
+  }
+
+  const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+  return (
+    <section className="contributor-match-panel">
+      <div className="escalation-evidence-heading">
+        <div>
+          <p className="eyebrow">Contributor recommendations</p>
+          <h3>AI-ranked ownership options</h3>
+        </div>
+        <button
+          type="button"
+          className="primary-button"
+          disabled={loading}
+          onClick={findMatches}
+        >
+          {loading
+            ? "Analyzing history..."
+            : result
+              ? "Refresh recommendations"
+              : "Find contributors"}
+        </button>
+      </div>
+      <p className="contributor-match-intro">
+        Ranks repository contributors using matching paths, merged work,
+        turnaround, discussion tone, and current workload.
+      </p>
+      {result?.recommended && (
+        <p className="contributor-match-recommended">
+          Top recommendation: <strong>@{result.recommended}</strong>
+        </p>
+      )}
+      {result?.fallback && (
+        <p className="contributor-match-fallback">
+          Using existing repository suggestions until the Contributor Agent
+          deployment is available.
+        </p>
+      )}
+      {candidates.length > 0 && (
+        <div className="contributor-match-list">
+          {candidates.map((candidate) => (
+            <article className="contributor-match-card" key={candidate.login}>
+              <div className="contributor-match-heading">
+                <div>
+                  <strong>@{candidate.login}</strong>
+                  <span>
+                    {candidate.fit_score}/100 fit
+                    {candidate.confidence
+                      ? ` · ${Math.round(Number(candidate.confidence) * 100)}% confidence`
+                      : ""}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="outline-button"
+                  disabled={Boolean(assignedLogin)}
+                  onClick={() => assign(candidate.login)}
+                >
+                  {assignedLogin === candidate.login
+                    ? "Assigning..."
+                    : "Assign"}
+                </button>
+              </div>
+              <p>{candidate.reasoning}</p>
+              <div className="contributor-match-evidence">
+                <span>{candidate.tech_stack_match}</span>
+                <span>{candidate.past_similar_work}</span>
+                <span>
+                  {candidate.median_turnaround_days == null
+                    ? "No measured turnaround"
+                    : `${candidate.median_turnaround_days} day median turnaround`}
+                </span>
+                <span>{candidate.current_load}</span>
+                <span>{candidate.sentiment_flag}</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      {result && !candidates.length && (
+        <p className="detail-muted">
+          No contributor history was available for this issue.
+        </p>
+      )}
+      {error && !result?.fallback && <p className="detail-error">{error}</p>}
+      {error && result?.fallback && (
+        <p className="contributor-match-fallback">{error}</p>
+      )}
+    </section>
+  );
 }
 
 function PlannerPanel({ planner }) {
@@ -2445,8 +2873,12 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
     return { key, label, hint, ...(analysis?.agents?.[key] || { status }) };
   });
   const activeAgents = agents.filter((agent) => agent.status !== "skipped");
-  const complete = activeAgents.filter((agent) => agent.status === "complete").length;
-  const failed = activeAgents.filter((agent) => agent.status === "failed").length;
+  const complete = activeAgents.filter(
+    (agent) => agent.status === "complete",
+  ).length;
+  const failed = activeAgents.filter(
+    (agent) => agent.status === "failed",
+  ).length;
 
   const duplicate = agents.find((agent) => agent.key === "duplicate")?.result;
   const duplicateMatches =
@@ -2460,6 +2892,8 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
   if (typeof onClose === "function")
     return (
       <CentralAnalysisDashboard
+        owner={owner}
+        repo={repo}
         issue={issue}
         analysis={analysis}
         agents={activeAgents}
@@ -2470,12 +2904,22 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
         escalation={escalation}
         moderator={moderator}
         onModeratorAction={async (payload) => {
-          const result = await api(`/api/issues/${owner}/${repo}/moderation/${issue.number}`, { method: "POST", body: payload });
-          setModerator((current) => current ? { ...current, issue: result.issue } : current);
+          const result = await api(
+            `/api/issues/${owner}/${repo}/moderation/${issue.number}`,
+            { method: "POST", body: payload },
+          );
+          setModerator((current) =>
+            current ? { ...current, issue: result.issue } : current,
+          );
         }}
         onFeedback={async (payload) => {
-          await api(`/api/issues/${escalation?.issue?.id || issue.id}/feedback`, { method: "POST", body: payload });
-          const updated = await api(`/api/issues/${escalation?.issue?.id || issue.id}/escalation`);
+          await api(
+            `/api/issues/${escalation?.issue?.id || issue.id}/feedback`,
+            { method: "POST", body: payload },
+          );
+          const updated = await api(
+            `/api/issues/${escalation?.issue?.id || issue.id}/escalation`,
+          );
           setEscalation(updated);
         }}
         onClose={onClose}
@@ -2527,7 +2971,7 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
                       ? "Waiting for reporter"
                       : analysis?.status === "waiting_duplicate_info"
                         ? "Waiting for duplicate evidence"
-                      : "Running"}
+                        : "Running"}
                 </strong>
                 <span>analysis status</span>
               </div>
@@ -2649,8 +3093,8 @@ function RepositoryOverviewDashboard({
       workflowStatuses[issue.number] &&
       workflowStatuses[issue.number] !== "complete",
   );
-  const escalationIssues = issues.filter(
-    (issue) => Boolean(escalationDecisions[issue.number]),
+  const escalationIssues = issues.filter((issue) =>
+    Boolean(escalationDecisions[issue.number]),
   );
   const resolvedIssues = issues.filter(
     (issue) =>
@@ -3049,13 +3493,18 @@ function RepositoryTabDashboard({
   const openPulls = pulls.filter((pull) => pull.state === "open");
   const escalationIssues = issues.filter(
     (issue) =>
-      !issue.pull_request && escalationDecisions[issue.number]?.needsAttention === true,
+      !issue.pull_request &&
+      escalationDecisions[issue.number]?.needsAttention === true,
   );
   const filteredEscalationIssues = escalationIssues.filter((issue) => {
     const decision = escalationDecisions[issue.number] || {};
     if (escalationFilter === "hotspot") return decision.isDuplicateHotspot;
-    if (escalationFilter === "security") return (decision.triggeringCategories || []).includes("security");
-    if (escalationFilter === "failed") return (decision.urgencyReasons || []).some((reason) => reason.includes("failed"));
+    if (escalationFilter === "security")
+      return (decision.triggeringCategories || []).includes("security");
+    if (escalationFilter === "failed")
+      return (decision.urgencyReasons || []).some((reason) =>
+        reason.includes("failed"),
+      );
     return true;
   });
   const highPriorityIssues = [...filteredEscalationIssues].sort(
@@ -3116,7 +3565,18 @@ function RepositoryTabDashboard({
           <EscalationTrendChart decisions={escalationDecisions} />
         </section>
         <div className="escalation-filters">
-          <label>Filter <select value={escalationFilter} onChange={(event) => setEscalationFilter(event.target.value)}><option value="all">All attention</option><option value="hotspot">Duplicate hotspots</option><option value="security">Security</option><option value="failed">Agent failures</option></select></label>
+          <label>
+            Filter{" "}
+            <select
+              value={escalationFilter}
+              onChange={(event) => setEscalationFilter(event.target.value)}
+            >
+              <option value="all">All attention</option>
+              <option value="hotspot">Duplicate hotspots</option>
+              <option value="security">Security</option>
+              <option value="failed">Agent failures</option>
+            </select>
+          </label>
         </div>
         {highPriorityIssues.length ? (
           <div className="high-priority-list">
@@ -3135,10 +3595,22 @@ function RepositoryTabDashboard({
                   <div className="high-priority-meta">
                     <span>Flagged by: {categories || "escalation"}</span>
                     <strong>
-                      Urgency {Number(decision.urgency || 0)}/100 · {Math.round(Number(decision.aggregateConfidence || 0) * 100)}% confidence
+                      Urgency {Number(decision.urgency || 0)}/100 ·{" "}
+                      {Math.round(
+                        Number(decision.aggregateConfidence || 0) * 100,
+                      )}
+                      % confidence
                     </strong>
-                    <span>{decision.needsAttention ? "Needs maintainer attention" : "Auto-handled"}</span>
-                    {decision.isDuplicateHotspot && <span className="hotspot-badge">Hotspot · {decision.duplicateHotspotCount}</span>}
+                    <span>
+                      {decision.needsAttention
+                        ? "Needs maintainer attention"
+                        : "Auto-handled"}
+                    </span>
+                    {decision.isDuplicateHotspot && (
+                      <span className="hotspot-badge">
+                        Hotspot · {decision.duplicateHotspotCount}
+                      </span>
+                    )}
                   </div>
                 </div>
               );
@@ -3717,9 +4189,7 @@ function TrendsSection() {
                   <p className="eyebrow">Per repository</p>
                   <h3>Activity matrix</h3>
                 </div>
-                <span>
-                  {data.generated_ms}ms · cached 5min
-                </span>
+                <span>{data.generated_ms}ms · cached 5min</span>
               </div>
               <table className="trend-table">
                 <thead>
@@ -3791,7 +4261,9 @@ function FileLevel({ owner, repo, windowDays }) {
     setPending(true);
     setError("");
     try {
-      setFiles(await api(`/api/trends/files/${owner}/${repo}?window=${windowDays}`));
+      setFiles(
+        await api(`/api/trends/files/${owner}/${repo}?window=${windowDays}`),
+      );
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -3841,14 +4313,18 @@ function RepoDigest({ repo, windowDays }) {
   const [showIssues, setShowIssues] = useState(false);
   return (
     <div className="digest-repo">
-      <button className="digest-repo-head" type="button" onClick={() => setOpen(!open)}>
+      <button
+        className="digest-repo-head"
+        type="button"
+        onClick={() => setOpen(!open)}
+      >
         <span>{open ? "▾" : "▸"}</span>
         <strong>
           {repo.owner}/{repo.repo}
         </strong>
         <small>
-          {repo.commits.count} commits · {repo.prs.total} PRs (
-          {repo.prs.merged} merged) · {repo.issues.open} open issues
+          {repo.commits.count} commits · {repo.prs.total} PRs ({repo.prs.merged}{" "}
+          merged) · {repo.issues.open} open issues
           {repo.risk.count > 0 ? ` · ${repo.risk.count} risky` : ""}
         </small>
       </button>
@@ -3880,8 +4356,15 @@ function RepoDigest({ repo, windowDays }) {
               </ul>
             </div>
             <div className="digest-card">
-              <button className="digest-card-toggle" type="button" onClick={() => setShowPrs(!showPrs)}>
-                <h4>Pull requests ({repo.prs.open} open / {repo.prs.merged} merged)</h4>
+              <button
+                className="digest-card-toggle"
+                type="button"
+                onClick={() => setShowPrs(!showPrs)}
+              >
+                <h4>
+                  Pull requests ({repo.prs.open} open / {repo.prs.merged}{" "}
+                  merged)
+                </h4>
                 <span>{showPrs ? "▾" : "▸"}</span>
               </button>
               {showPrs && (
@@ -3901,7 +4384,11 @@ function RepoDigest({ repo, windowDays }) {
               )}
             </div>
             <div className="digest-card">
-              <button className="digest-card-toggle" type="button" onClick={() => setShowIssues(!showIssues)}>
+              <button
+                className="digest-card-toggle"
+                type="button"
+                onClick={() => setShowIssues(!showIssues)}
+              >
                 <h4>Unresolved issues ({repo.issues.unresolved})</h4>
                 <span>{showIssues ? "▾" : "▸"}</span>
               </button>
@@ -3936,13 +4423,19 @@ function RepoDigest({ repo, windowDays }) {
                 ))}
                 {!repo.risk.items.length && (
                   <li>
-                    <span>No high-confidence security flags in this window.</span>
+                    <span>
+                      No high-confidence security flags in this window.
+                    </span>
                   </li>
                 )}
               </ul>
             </div>
           </div>
-          <FileLevel owner={repo.owner} repo={repo.repo} windowDays={windowDays} />
+          <FileLevel
+            owner={repo.owner}
+            repo={repo.repo}
+            windowDays={windowDays}
+          />
         </div>
       )}
     </div>
@@ -3956,23 +4449,24 @@ function SummaryTree({ summary, windowDays }) {
     <section className="summary-section">
       <div className="summary-head">
         <p className="eyebrow">Hierarchical digest</p>
-        <h3>
-          File → Commit → PR → Repo → Org
-        </h3>
+        <h3>File → Commit → PR → Repo → Org</h3>
         <small>
           {summary.window_days}-day window · generated in {summary.generated_ms}
           ms · expand a level only when needed
         </small>
       </div>
       <div className="digest-org">
-        <button className="digest-org-head" type="button" onClick={() => setOrgOpen(!orgOpen)}>
+        <button
+          className="digest-org-head"
+          type="button"
+          onClick={() => setOrgOpen(!orgOpen)}
+        >
           <span>{orgOpen ? "▾" : "▸"}</span>
           <strong>Organization</strong>
           <small>
-            {org.repos} repos · {org.totals.commits} commits ·{" "}
-            {org.totals.prs} PRs ({org.totals.mergedPrs} merged,{" "}
-            {org.totals.openPrs} open) · {org.totals.openIssues} open issues ·{" "}
-            {org.totals.risky} risky
+            {org.repos} repos · {org.totals.commits} commits · {org.totals.prs}{" "}
+            PRs ({org.totals.mergedPrs} merged, {org.totals.openPrs} open) ·{" "}
+            {org.totals.openIssues} open issues · {org.totals.risky} risky
           </small>
         </button>
         {orgOpen && (
@@ -3981,7 +4475,10 @@ function SummaryTree({ summary, windowDays }) {
               <div className="digest-card">
                 <h4>Open vs merged</h4>
                 <SummaryRow label="Open PRs" value={org.open_vs_merged.open} />
-                <SummaryRow label="Merged PRs" value={org.open_vs_merged.merged} />
+                <SummaryRow
+                  label="Merged PRs"
+                  value={org.open_vs_merged.merged}
+                />
                 <SummaryRow
                   label="Open/merged ratio"
                   value={org.open_vs_merged.ratio ?? "—"}
@@ -4020,7 +4517,11 @@ function SummaryTree({ summary, windowDays }) {
             </div>
             <div className="digest-repos">
               {(summary.repos || []).map((repo) => (
-                <RepoDigest repo={repo} windowDays={windowDays} key={`${repo.owner}/${repo.repo}`} />
+                <RepoDigest
+                  repo={repo}
+                  windowDays={windowDays}
+                  key={`${repo.owner}/${repo.repo}`}
+                />
               ))}
             </div>
           </div>
