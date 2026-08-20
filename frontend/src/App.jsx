@@ -3344,45 +3344,7 @@ function RepositoryOverviewDashboard({
                 ))}
               </div>
             </article>
-            <article className="repo-dashboard-card recent-card">
-              <div className="dashboard-card-heading">
-                <div>
-                  <p className="eyebrow">Live queue</p>
-                  <h2>Recent issues</h2>
-                </div>
-                <span>{openIssues.length} open</span>
-              </div>
-              <div className="recent-issue-list">
-                {issues
-                  .filter((issue) => !issue.pull_request)
-                  .slice(0, 5)
-                  .map((issue) => (
-                    <button
-                      className="recent-issue-row"
-                      type="button"
-                      key={issue.id}
-                      onClick={() => setSelectedIssue(issue)}
-                    >
-                      <span
-                        className={`state-dot ${issue.state === "open" ? "open" : "closed"}`}
-                      >
-                        #
-                      </span>
-                      <span>
-                        <strong>{issue.title}</strong>
-                        <small>
-                          #{issue.number} · {formatDate(issue.created_at)}
-                        </small>
-                      </span>
-                      <em>{issue.state}</em>
-                      <span className="issue-arrow">→</span>
-                    </button>
-                  ))}
-                {!openIssues.length && (
-                  <EmptyState>No issues found.</EmptyState>
-                )}
-              </div>
-            </article>
+            <OverviewInbox issues={issues} pulls={pulls} onSelectIssue={setSelectedIssue} />
           </section>
         </main>
       </div>
@@ -3395,6 +3357,56 @@ function RepositoryOverviewDashboard({
         />
       )}
     </div>
+  );
+}
+
+function OverviewInbox({ issues, pulls, onSelectIssue }) {
+  const [activeType, setActiveType] = useState("issues");
+  const issueItems = issues.filter((item) => !item.pull_request);
+  const commentItems = issueItems.filter((item) => Number(item.comments || 0) > 0);
+  const tabs = [
+    { key: "issues", label: "Issues", count: issueItems.length },
+    { key: "pulls", label: "PRs", count: pulls.length },
+    { key: "comments", label: "Comments", count: commentItems.reduce((total, item) => total + Number(item.comments || 0), 0) },
+  ];
+  const items = activeType === "issues" ? issueItems : activeType === "pulls" ? pulls : commentItems;
+  const sortedItems = [...items]
+    .sort((first, second) => new Date(second.updated_at || second.created_at) - new Date(first.updated_at || first.created_at))
+    .slice(0, 5);
+  return (
+    <article className="repo-dashboard-card inbox-card">
+      <div className="dashboard-card-heading">
+        <div>
+          <p className="eyebrow">Inbox</p>
+          <h2>All new events</h2>
+        </div>
+        <span>{issueItems.length + pulls.length} tracked</span>
+      </div>
+      <div className="inbox-tabs" role="tablist" aria-label="Inbox event types">
+        {tabs.map((tab) => (
+          <button className={activeType === tab.key ? "active" : ""} type="button" role="tab" aria-selected={activeType === tab.key} key={tab.key} onClick={() => setActiveType(tab.key)}>
+            {tab.label} <b>{tab.count}</b>
+          </button>
+        ))}
+      </div>
+      <div className="inbox-table-head"><span>Title</span><span>Type</span><span>Author</span><span>Time</span></div>
+      <div className="inbox-event-list">
+        {sortedItems.map((item) => {
+          const isPull = activeType === "pulls";
+          const isComment = activeType === "comments";
+          const eventDate = item.updated_at || item.created_at;
+          return (
+            <button className="inbox-event-row" type="button" key={`${activeType}-${item.id}`} onClick={() => !isComment && onSelectIssue(item)}>
+              <strong>{isComment ? `Comment on ${item.title}` : item.title}</strong>
+              <span>{isPull ? "PR" : isComment ? "Comment" : "Issue"}</span>
+              <span>@{item.user?.login || item.author || "unknown"}</span>
+              <time dateTime={eventDate}>{eventDate ? formatDate(eventDate) : "—"}</time>
+            </button>
+          );
+        })}
+        {!sortedItems.length && <EmptyState>No {activeType} found.</EmptyState>}
+      </div>
+    </article>
   );
 }
 

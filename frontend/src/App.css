@@ -399,6 +399,20 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .health-overview-legend { display: flex; flex-wrap: wrap; gap: 18px; justify-content: center; margin-top: 2px; }
 .health-overview-legend span { align-items: center; color: var(--muted); display: inline-flex; font-size: 11px; gap: 6px; }
 .health-overview-legend i { border-radius: 50%; display: inline-block; height: 9px; width: 9px; }
+.inbox-card { min-height: 250px; }
+.inbox-tabs { border-bottom: 1px solid var(--line); display: flex; gap: 22px; margin: 0 -20px 0; padding: 0 20px; }
+.inbox-tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 12px; padding: 10px 0 9px; }
+.inbox-tabs button.active { border-bottom-color: var(--accent); color: var(--accent); }
+.inbox-tabs b { font-size: 10px; margin-left: 4px; }
+.inbox-table-head, .inbox-event-row { align-items: center; display: grid; gap: 12px; grid-template-columns: minmax(0, 2.2fr) 62px minmax(72px, .8fr) 70px; }
+.inbox-table-head { color: var(--muted); font-size: 10px; font-weight: 700; padding: 14px 0 7px; }
+.inbox-event-list { display: grid; }
+.inbox-event-row { background: transparent; border: 0; border-top: 1px solid var(--line); color: var(--ink); cursor: pointer; padding: 11px 0; text-align: left; width: 100%; }
+.inbox-event-row:hover { background: var(--surface-soft); }
+.inbox-event-row strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-event-row span, .inbox-event-row time { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-event-row time { text-align: right; }
+@media (max-width: 560px) { .inbox-table-head, .inbox-event-row { gap: 7px; grid-template-columns: minmax(0, 1.7fr) 52px minmax(58px, .8fr) 58px; }.inbox-tabs { gap: 14px; } }
 .health-chart-heading { align-items: baseline; display: flex; gap: 10px; justify-content: space-between; margin-bottom: 6px; }
 .health-chart-heading strong { font-size: 12px; }
 .health-chart-heading span { color: var(--muted); font-family: 'Space Grotesk', sans-serif; font-size: 12px; }
