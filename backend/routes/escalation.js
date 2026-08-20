@@ -1,7 +1,7 @@
 const express = require("express");
 const { AgentRun, EscalationDecision } = require("../models");
-const { REQUIRED_CATEGORIES, pendingDecision } = require("../agents/escalation_aggregator/aggregator");
-const { normalizeCategory } = require("../agents/escalation_aggregator/scoringRules");
+const { REQUIRED_CATEGORIES, pendingDecision } = require("../Agents/escalation_aggregator/aggregator");
+const { normalizeCategory } = require("../Agents/escalation_aggregator/scoringRules");
 
 const router = express.Router();
 

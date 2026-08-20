@@ -68,7 +68,7 @@ async function saveAgentRun(issueRecord, state, agentName, result, status = "com
         defaults: values,
       });
       if (!run.isNewRecord) await run.update(values);
-      await require("../agents/escalation_aggregator/aggregator").evaluateIssueForEscalation(issueRecord.id);
+      await require("../Agents/escalation_aggregator/aggregator").evaluateIssueForEscalation(issueRecord.id);
     }
   } catch (error) {
     console.error("Workflow database agent write failed:", error.message);
