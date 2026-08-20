@@ -251,10 +251,8 @@ async function createAnalysis(issue, repository, token, persisted, event = "issu
     type: "agent_analysis",
     key: analysisKey(repository.owner.login, repository.name, issue.number),
     run: async () => {
-      // 1. Planner decides what to investigate (visible trace stored).
-      const planner = await runPlanner(issue, repository, token, event, record);
-      const routed = planner?.routing?.agents || null;
-      // 2. Run the required gated pipeline regardless of planner suggestions.
+      // Start the required gated pipeline immediately. Planner output is
+      // advisory and must never delay or suppress agent execution.
       await runAllAgents(issue, repository, record, token).catch(async (error) => {
         record.status = "failed";
         record.error = error.message;
