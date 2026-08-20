@@ -31,14 +31,6 @@ function isHumanIssueComment(payload) {
   return Boolean(sender) && sender.type !== "Bot" && sender.type !== "Integration";
 }
 
-function needsDuplicateEvidence(result) {
-  return Boolean(
-    result &&
-    !result.is_direct_duplicate &&
-    (result.suggested_action === "request_reproduction" || result.evidence_gaps?.length)
-  );
-}
-
 function isConfirmedDuplicate(result) {
   const topMatch = result?.matches?.[0];
   return Boolean(
@@ -132,7 +124,8 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
   let nextStep = record.step;
   async function runStep([name, dir, script, args, payload, timeoutMs]) {
     const rerun = (name === "duplicate" && record.resumeDuplicate) ||
-      (name === "missingInfo" && (record.resumeMissingInfo || record.forceMissingInfo));
+      (name === "missingInfo" && record.resumeMissingInfo);
+    if (name === "missingInfo" && record.agents[name]?.status === "waiting_duplicate_info" && !record.resumeMissingInfo) return null;
     if (record.agents[name]?.status === "complete" && !rerun) return null;
     const step = ++nextStep;
     record.step = step;
@@ -174,44 +167,11 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
       await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
       return;
     }
-    if (name === "duplicate" && needsDuplicateEvidence(result)) {
-      record.forceMissingInfo = true;
-      const missingStep = await runStep(steps[0]);
-      const missingResult = missingStep?.result || {};
-      if (missingResult.draft_comment) {
-        await githubIssueAction(owner, repo, issue.number, token, "POST", { body: missingResult.draft_comment });
-      } else {
-        const gaps = missingResult.missing_details?.length
-          ? missingResult.missing_details
-          : ["more reproduction steps, logs, or environment details to compare with the possible duplicate"];
-        await githubIssueAction(owner, repo, issue.number, token, "POST", {
-          body: `I need a little more detail before deciding whether this is a duplicate.\n\n${gaps.map((gap, index) => `${index + 1}. ${gap}`).join("\n")}\n\nPlease reply here with the missing details. I will re-check the duplicate comparison after your reply.`,
-        });
-      }
-      record.status = "waiting_duplicate_info";
-      record.stopReason = "More evidence is needed before confirming whether this is a duplicate.";
-      await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
-      return;
-    }
     if (name === "missingInfo" && result.missing_fields?.length) {
       if (result.draft_comment) await githubIssueAction(owner, repo, issue.number, token, "POST", { body: result.draft_comment });
-      record.status = record.forceMissingInfo ? "waiting_duplicate_info" : "waiting_missing_info";
-      record.stopReason = record.forceMissingInfo
-        ? "More evidence is needed before confirming whether this is a duplicate."
-        : "Missing information requested from the reporter.";
+      record.status = "waiting_missing_info";
+      record.stopReason = "Missing information requested from the reporter.";
       await saveAgentRun(record.issueRecord, { step: record.step, status: record.status }, name, result, record.status);
-      await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
-      return;
-    }
-    if (name === "missingInfo" && record.forceMissingInfo) {
-      const gaps = result.missing_details?.length
-        ? result.missing_details
-        : ["more reproduction steps, logs, or environment details to compare with the possible duplicate"];
-      await githubIssueAction(owner, repo, issue.number, token, "POST", {
-        body: `I need a little more detail before deciding whether this is a duplicate.\n\n${gaps.map((gap, index) => `${index + 1}. ${gap}`).join("\n")}\n\nPlease reply here with the missing details. I will re-check the duplicate comparison after your reply.`,
-      });
-      record.status = "waiting_duplicate_info";
-      record.stopReason = "More evidence is needed before confirming whether this is a duplicate.";
       await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });
       return;
     }
