@@ -75,10 +75,22 @@ def fetch_open_issues(owner, repo, token, limit=40):
     )
     issues = issues[:limit]
 
+    # Fetch comment history for every kept issue in parallel — 40 sequential
+    # GitHub calls can take ~20s+; parallelized they finish in a few seconds.
+    from concurrent.futures import ThreadPoolExecutor
+
+    with_comments = [i for i in issues if i.get("comments", 0)]
+    comment_map = {}
+    if with_comments:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            urls = [i["comments_url"] for i in with_comments]
+            for issue, comments in zip(with_comments, pool.map(lambda u: _gh_get(u, headers), urls)):
+                comment_map[issue["number"]] = comments
+
     now = datetime.now(timezone.utc)
     out = []
     for issue in issues:
-        comments = _gh_get(issue["comments_url"], headers) if issue.get("comments", 0) else []
+        comments = comment_map.get(issue["number"], [])
         mapped_comments = []
         last_activity = datetime.fromisoformat(issue["created_at"].replace("Z", "+00:00"))
         for c in comments:

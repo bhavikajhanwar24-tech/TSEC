@@ -71,10 +71,10 @@ async function getWorkflowStatuses(owner, repo) {
   }
 }
 
-async function startAgent(name, agentDir, script, args, stdinPayload, env, record, step) {
+async function startAgent(name, agentDir, script, args, stdinPayload, env, record, step, timeoutMs) {
   record.agents[name] = { status: "running", startedAt: new Date().toISOString() };
   try {
-    const result = await runAgentJob(agentDir, script, args, stdinPayload, env);
+    const result = await runAgentJob(agentDir, script, args, stdinPayload, env, timeoutMs);
     record.agents[name] = { status: "complete", result, completedAt: new Date().toISOString() };
     await saveAgentRun(record.issueRecord, { step, status: "running" }, name, result);
     return result;
@@ -106,16 +106,16 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     ["missingInfo", agentDirs.missingInfo, "missing_info_agent.py", ["--repo", `${owner}/${repo}`, "--issue", String(issue.number)], undefined],
     ["sensitivity", agentDirs.sensitivity, "sensitivity_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue],
     ["sentiment", agentDirs.sentiment, "serve.py", [], { owner, repo, issueNumber: issue.number, repo_norms: {} }],
-    ["backlog", agentDirs.backlog, "serve.py", [], { owner, repo, repo_norms: {} }],
-    ["health", agentDirs.health, "health_agent.py", ["--owner", owner, "--repo", repo], undefined],
+    ["backlog", agentDirs.backlog, "serve.py", [], { owner, repo, repo_norms: {} }, 240000],
+    ["health", agentDirs.health, "health_agent.py", ["--owner", owner, "--repo", repo], undefined, 240000],
   ];
   let nextStep = record.step;
-  async function runStep([name, dir, script, args, payload]) {
+  async function runStep([name, dir, script, args, payload, timeoutMs]) {
     if (record.agents[name]?.status === "complete" && !(name === "missingInfo" && record.resumeMissingInfo)) return null;
     const step = ++nextStep;
     record.step = step;
     await saveWorkflow(record.issueRecord, { step, status: "running", output: record });
-    return { name, result: await startAgent(name, dir, script, args, payload, env, record, step) };
+    return { name, result: await startAgent(name, dir, script, args, payload, env, record, step, timeoutMs) };
   }
 
   for (const stepDefinition of steps.slice(0, 3)) {
