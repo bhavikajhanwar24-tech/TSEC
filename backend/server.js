@@ -1,4 +1,3 @@
-const path = require("path");
 const express = require("express");
 const session = require("express-session");
 const cors = require("cors");
@@ -43,8 +42,6 @@ app.use(
 
 app.use("/auth", authRoutes);
 app.use("/api", apiRoutes);
-app.use(express.static(path.join(__dirname, "public")));
-
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

@@ -1,1 +1,0 @@
-window.API_BASE_URL = "https://your-deployed-backend.example.com";
