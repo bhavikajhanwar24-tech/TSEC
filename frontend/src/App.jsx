@@ -621,9 +621,9 @@ function BacklogFlowChart({ labels, opened, closed, backlog, color }) {
   const w = 280;
   const h = 100;
   const pad = 8;
-  const safeOpen = opened.map((v) => Number(v) || 0);
-  const safeClosed = closed.map((v) => Number(v) || 0);
-  const safeBacklog = backlog.map((v) => Number(v) || 0);
+  const safeOpen = (opened || []).map((v) => Number(v) || 0);
+  const safeClosed = (closed || []).map((v) => Number(v) || 0);
+  const safeBacklog = (backlog || []).map((v) => Number(v) || 0);
   const proj = projectSeries(safeBacklog);
   const max = Math.max(...safeOpen, ...safeClosed, ...safeBacklog, ...proj, 1);
   const step = (w - 2 * pad) / Math.max(1, safeOpen.length + proj.length - 1);
@@ -723,6 +723,21 @@ function BacklogFlowChart({ labels, opened, closed, backlog, color }) {
   );
 }
 
+function deriveHealthScore(trends) {
+  let score = 100;
+  (trends || []).forEach((trend) => {
+    const ratio = Number(trend.change_ratio) || 0;
+    if (trend.metric === "time_to_first_response_days")
+      score -= ratio >= 3 ? 30 : 15;
+    else if (trend.metric === "backlog_size") score -= ratio >= 1.5 ? 15 : 8;
+    else if (trend.metric === "duplicate_rate") score -= 10;
+    else if (trend.metric === "incoming_volume") score -= 5;
+    else if (trend.metric === "active_contributors")
+      score -= ratio <= 0.67 ? 15 : 8;
+  });
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
 function HealthTrendDetail({ result }) {
   const series = result.series || {};
   const labels = result.week_labels || [];
@@ -734,6 +749,17 @@ function HealthTrendDetail({ result }) {
       ? values[values.length - 1]
       : 0;
   };
+  const healthScore =
+    result.health_score !== undefined
+      ? result.health_score
+      : deriveHealthScore(result.trends || []);
+  const healthStatus =
+    result.health_status ||
+    (healthScore >= 80
+      ? "Healthy"
+      : healthScore >= 60
+        ? "Watch"
+        : "Declining");
   const responseTrend = (result.trends || []).find(
     (t) => t.metric === "time_to_first_response_days",
   );
@@ -745,17 +771,30 @@ function HealthTrendDetail({ result }) {
   const kpis = [
     {
       label: "Response time (latest)",
-      value: `${last("time_to_first_response_days")} days`,
+      value: has("time_to_first_response_days")
+        ? `${last("time_to_first_response_days")} days`
+        : "—",
     },
-    { label: "Open backlog", value: `${Math.round(last("backlog_size"))}` },
+    {
+      label: "Open backlog",
+      value: has("backlog_size") ? `${Math.round(last("backlog_size"))}` : "—",
+    },
     {
       label: "Opened / closed last week",
-      value: `${Math.round(last("incoming_volume"))} / ${Math.round(last("issues_closed"))}`,
+      value:
+        has("incoming_volume") || has("issues_closed")
+          ? `${Math.round(last("incoming_volume"))} / ${Math.round(last("issues_closed"))}`
+          : "—",
     },
-    { label: "Duplicate rate", value: `${last("duplicate_rate")}%` },
+    {
+      label: "Duplicate rate",
+      value: has("duplicate_rate") ? `${last("duplicate_rate")}%` : "—",
+    },
     {
       label: "Contributors (new last week)",
-      value: `${Math.round(last("active_contributors"))} (${Math.round(last("new_contributors"))})`,
+      value: has("active_contributors")
+        ? `${Math.round(last("active_contributors"))} (${Math.round(last("new_contributors"))})`
+        : "—",
     },
     {
       label: "PR merge latency",
@@ -765,10 +804,7 @@ function HealthTrendDetail({ result }) {
   return (
     <div className="health-trend-detail">
       <div className="health-overview">
-        <HealthScoreGauge
-          score={result.health_score}
-          status={result.health_status}
-        />
+        <HealthScoreGauge score={healthScore} status={healthStatus} />
         <div className="health-kpis">
           {kpis.map((kpi) => (
             <div className="health-kpi" key={kpi.label}>
