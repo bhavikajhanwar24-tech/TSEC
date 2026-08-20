@@ -348,6 +348,24 @@ function RepositoryChat({ owner, repo }) {
   );
 }
 
+function RepositoryChatButton({ onClick, active }) {
+  return (
+    <button
+      className={`repo-chat-launcher${active ? " active" : ""}`}
+      type="button"
+      onClick={onClick}
+      aria-label="Open repository chatbot"
+    >
+      <span className="repo-chat-launcher-icon">✦</span>
+      <span>
+        <strong>Repository chatbot</strong>
+        <small>Ask about issues, PRs, and history</small>
+      </span>
+      <span className="repo-chat-launcher-arrow">→</span>
+    </button>
+  );
+}
+
 const automaticAgents = [
   [
     "duplicate",
@@ -962,6 +980,7 @@ function RepositoryOverviewDashboard({
     codeFrequency = [],
   } = details;
   const [selectedIssue, setSelectedIssue] = useState(null);
+  const [chatOpen, setChatOpen] = useState(false);
   const openIssues = issues.filter(
     (issue) => !issue.pull_request && issue.state === "open",
   );
@@ -1044,9 +1063,10 @@ function RepositoryOverviewDashboard({
               </button>
             ))}
           </nav>
-          <RepositoryChat owner={repo.owner.login} repo={repo.name} />
+          <RepositoryChatButton onClick={() => setChatOpen((open) => !open)} active={chatOpen} />
         </aside>
         <main className="repo-dashboard-main">
+          {chatOpen && <RepositoryChat owner={repo.owner.login} repo={repo.name} />}
           <header className="repo-dashboard-topbar">
             <div>
               <p className="eyebrow">Repository overview</p>
@@ -1256,6 +1276,7 @@ function RepositoryTabDashboard({
     codeFrequencyPending,
   } = details;
   const [selectedIssue, setSelectedIssue] = useState(null);
+  const [chatOpen, setChatOpen] = useState(false);
   const openIssues = issues.filter(
     (issue) => !issue.pull_request && issue.state === "open",
   );
@@ -1393,9 +1414,10 @@ function RepositoryTabDashboard({
               </button>
             ))}
           </nav>
-          <RepositoryChat owner={repo.owner.login} repo={repo.name} />
+          <RepositoryChatButton onClick={() => setChatOpen((open) => !open)} active={chatOpen} />
         </aside>
         <main className="repo-dashboard-main">
+          {chatOpen && <RepositoryChat owner={repo.owner.login} repo={repo.name} />}
           <header className="repo-dashboard-topbar">
             <div>
               <p className="eyebrow">Repository workspace</p>
@@ -1673,7 +1695,6 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
           </div>
         )}
       </section>
-      <RepositoryChat owner={repo.owner.login} repo={repo.name} />
       {selectedIssue && (
         <AgentAnalysisView
           owner={repo.owner.login}
