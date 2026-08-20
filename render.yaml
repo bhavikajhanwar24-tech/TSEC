@@ -6,3 +6,10 @@ services:
     buildCommand: npm ci && npx sequelize-cli db:migrate && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
     startCommand: PATH=.venv/bin:$PATH npm start
     healthCheckPath: /health
+    envVars:
+      - key: MEMORY_STORE_DIR
+        value: /var/data/repoguardian-memory
+    disk:
+      name: repoguardian-memory
+      mountPath: /var/data/repoguardian-memory
+      sizeGB: 1
