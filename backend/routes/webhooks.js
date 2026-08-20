@@ -38,17 +38,23 @@ function runAllAgents(issue, repository, record, token = process.env.GITHUB_TOKE
   const owner = repository.owner.login;
   const repo = repository.name;
   const env = { GITHUB_TOKEN: token };
-  return Promise.all([
-    startAgent("duplicate", agentDirs.duplicate, "duplicate_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue, env, record),
-    startAgent("missingInfo", agentDirs.missingInfo, "missing_info_agent.py", ["--repo", `${owner}/${repo}`, "--issue", String(issue.number)], undefined, env, record),
-    startAgent("sensitivity", agentDirs.sensitivity, "sensitivity_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue, env, record),
-    startAgent("sentiment", agentDirs.sentiment, "serve.py", [], { owner, repo, issueNumber: issue.number, repo_norms: {} }, env, record),
-    startAgent("backlog", agentDirs.backlog, "serve.py", [], { owner, repo, repo_norms: {} }, env, record),
-    startAgent("health", agentDirs.health, "health_agent.py", ["--owner", owner, "--repo", repo], undefined, env, record),
-  ]).then(() => {
-    record.status = Object.values(record.agents).some((agent) => agent.status === "failed") ? "complete_with_errors" : "complete";
-    record.completedAt = new Date().toISOString();
-  });
+  // Run agents sequentially: each spawns a Python process that imports
+  // chromadb + langgraph (hundreds of MB of RSS). Running all six at once
+  // OOM-kills the Node service on Render's small instances (502).
+  const jobs = [
+    () => startAgent("duplicate", agentDirs.duplicate, "duplicate_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue, env, record),
+    () => startAgent("missingInfo", agentDirs.missingInfo, "missing_info_agent.py", ["--repo", `${owner}/${repo}`, "--issue", String(issue.number)], undefined, env, record),
+    () => startAgent("sensitivity", agentDirs.sensitivity, "sensitivity_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue, env, record),
+    () => startAgent("sentiment", agentDirs.sentiment, "serve.py", [], { owner, repo, issueNumber: issue.number, repo_norms: {} }, env, record),
+    () => startAgent("backlog", agentDirs.backlog, "serve.py", [], { owner, repo, repo_norms: {} }, env, record),
+    () => startAgent("health", agentDirs.health, "health_agent.py", ["--owner", owner, "--repo", repo], undefined, env, record),
+  ];
+  return jobs
+    .reduce((chain, job) => chain.then(job), Promise.resolve())
+    .then(() => {
+      record.status = Object.values(record.agents).some((agent) => agent.status === "failed") ? "complete_with_errors" : "complete";
+      record.completedAt = new Date().toISOString();
+    });
 }
 
 function createAnalysis(issue, repository, token) {
