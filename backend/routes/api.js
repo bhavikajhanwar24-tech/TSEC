@@ -49,6 +49,41 @@ router.get("/repos", async (req, res) => {
   }
 });
 
+router.get("/repos/:owner/:repo/details", async (req, res) => {
+  const { owner, repo } = req.params;
+  const headers = githubHeaders(req.session.githubToken);
+  const baseUrl = `${GITHUB_API}/repos/${owner}/${repo}`;
+
+  try {
+    const responses = await Promise.all([
+      fetch(baseUrl, { headers }),
+      fetch(`${baseUrl}/issues?state=all&per_page=30`, { headers }),
+      fetch(`${baseUrl}/pulls?state=all&per_page=30`, { headers }),
+      fetch(`${baseUrl}/commits?per_page=30`, { headers }),
+      fetch(`${baseUrl}/contributors?per_page=30`, { headers }),
+      fetch(`${baseUrl}/stats/code_frequency`, { headers }),
+    ]);
+
+    if (!responses[0].ok) return res.status(responses[0].status).json({ error: "Repo not found" });
+
+    const [repoData, issues, pulls, commits, contributors, codeFrequency] = await Promise.all(
+      responses.map((response) => response.json())
+    );
+
+    res.json({
+      repo: repoData,
+      issues: Array.isArray(issues) ? issues : [],
+      pulls: Array.isArray(pulls) ? pulls : [],
+      commits: Array.isArray(commits) ? commits : [],
+      contributors: Array.isArray(contributors) ? contributors : [],
+      codeFrequency: Array.isArray(codeFrequency) ? codeFrequency : [],
+    });
+  } catch (err) {
+    console.error("Failed to fetch repository details:", err);
+    res.status(500).json({ error: "Failed to fetch repository details" });
+  }
+});
+
 router.get("/repos/:owner/:repo/tree", async (req, res) => {
   const { owner, repo } = req.params;
   const headers = githubHeaders(req.session.githubToken);
