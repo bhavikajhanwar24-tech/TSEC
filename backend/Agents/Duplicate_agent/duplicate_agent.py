@@ -35,7 +35,7 @@ import os
 import re
 import sys
 from collections import Counter
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -44,6 +44,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIAEmbeddings
 from langgraph.graph import END, START, StateGraph
+from pydantic import BaseModel, Field
 
 COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common")
 if COMMON_DIR not in sys.path:
@@ -64,6 +65,58 @@ GITHUB_OWNER = os.getenv("GITHUB_OWNER", "")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "")
 
 OS_NAMES = ["Windows 11", "Windows 10", "Windows", "macOS", "Linux", "Ubuntu", "iOS", "Android", "Chrome", "Firefox"]
+
+
+# ---------------------------------------------------------------------------
+# Structured outputs
+#
+# Both LLM calls go through with_structured_output so the model can only
+# return the fields below — its internal reasoning/thinking can never leak
+# into the answer, and stray prose can never break the JSON parse.
+# ---------------------------------------------------------------------------
+
+class ComparisonResult(BaseModel):
+    classification: Literal["direct_duplicate", "related", "not_duplicate"]
+    evidence: List[str] = Field(default_factory=list)
+
+
+class DecisionResult(BaseModel):
+    is_direct_duplicate: bool
+    duplicate_confidence: float = Field(ge=0, le=1)
+    suggested_action: Literal["comment_and_link", "link_open_issue", "request_reproduction", "escalate", "no_action"]
+    recommendation: str
+    evidence_gaps: List[str] = Field(default_factory=list)
+
+
+def _extract_json(text: str) -> Any:
+    """Pull the first balanced JSON object out of arbitrary model text (code
+    fences, thinking blocks, trailing prose). Raises if there is none."""
+    text = re.sub(r"^```(?:json)?|```$", "", (text or "")).strip()
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("no JSON object found in model output")
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start:index + 1])
+    raise ValueError("unbalanced JSON in model output")
 
 
 # ---------------------------------------------------------------------------
@@ -438,13 +491,21 @@ def node_compare_evidence(state: AgentState) -> AgentState:
             '"evidence": ["<concrete matching signal>", ...]}'
         )
         try:
-            raw = llm.invoke([HumanMessage(content=prompt)]).content.strip()
-            raw = re.sub(r"^```(?:json)?|```$", "", raw).strip()
-            parsed = json.loads(raw)
-            evidence = parsed.get("evidence", []) or []
-            parsed["match_strength"] = min(len(evidence), 4)
+            structured = llm.with_structured_output(ComparisonResult)
+            result = structured.invoke(prompt)
+            parsed = {"classification": result.classification, "evidence": result.evidence or []}
+            parsed["match_strength"] = min(len(parsed["evidence"]), 4)
             matches.append({**base, **parsed})
-        except Exception as exc:  # never let one bad parse kill the run
+        except Exception as exc:  # never let one bad call kill the run
+            try:
+                raw = llm.invoke([HumanMessage(content=prompt)]).content
+                parsed = _extract_json(raw)
+                evidence = parsed.get("evidence", []) or []
+                parsed["match_strength"] = min(len(evidence), 4)
+                matches.append({**base, **parsed, "model_fallback": True})
+                continue
+            except Exception:
+                pass
             comparison = _compare_heuristic(state["signals"], cand)
             matches.append({
                 **base,
@@ -559,13 +620,21 @@ def node_decide(state: AgentState) -> AgentState:
         '"recommendation": "<plain-language verdict for a maintainer>", "evidence_gaps": [...]}'
     )
     try:
-        raw = llm.invoke([HumanMessage(content=prompt)]).content.strip()
-        raw = re.sub(r"^```(?:json)?|```$", "", raw).strip()
-        parsed = json.loads(raw)
+        structured = llm.with_structured_output(DecisionResult)
+        result = structured.invoke(prompt)
+        parsed = result.model_dump()
         parsed["matches"] = matches
         status = "needs_human_review" if parsed["suggested_action"] == "escalate" else "complete"
         return {**state, "status": status, "result": {"status": status, **parsed}}
     except Exception as exc:
+        try:
+            raw = llm.invoke([HumanMessage(content=prompt)]).content
+            parsed = _extract_json(raw)
+            parsed["matches"] = matches
+            status = "needs_human_review" if parsed.get("suggested_action") == "escalate" else "complete"
+            return {**state, "status": status, "result": {"status": status, **parsed}}
+        except Exception:
+            pass
         decision = _decide_heuristic(state)
         status = "needs_human_review" if decision["suggested_action"] == "escalate" else "complete"
         return {**state, "status": status, "result": {"status": status, **decision}, "error": str(exc)}
