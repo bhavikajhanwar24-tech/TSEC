@@ -74,6 +74,8 @@ class AgentState(TypedDict):
     owner: str
     repo: str
     weeks: int
+    raw: Dict[str, Any]                 # raw fetched data (issues, commenters, ...)
+    releases: List[Dict[str, Any]]      # fetched releases
     series: Dict[str, List[float]]      # weekly metric series, oldest -> newest
     week_labels: List[str]              # ISO week labels aligned with series
     trends: List[Dict[str, Any]]        # detected inflections with evidence
