@@ -48,7 +48,7 @@ router.get("/github", (req, res) => {
 
   const params = new URLSearchParams({
     client_id: process.env.GITHUB_CLIENT_ID,
-    scope: "repo read:user",
+    scope: "read:user user:email repo",
     state,
   });
 
