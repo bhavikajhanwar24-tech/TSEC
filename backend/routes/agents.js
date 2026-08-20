@@ -308,6 +308,29 @@ router.post("/sweeps/run-all", requireAuth, async (req, res) => {
   res.json(result);
 });
 
+// POST /api/agents/contributor-match
+// Body: { owner, repo, issueNumber }
+router.post("/contributor-match", requireAuth, async (req, res) => {
+  const { owner, repo, issueNumber } = req.body || {};
+  if (!owner || !repo || !issueNumber) {
+    return res.status(400).json({ error: "owner, repo, and issueNumber are required" });
+  }
+
+  try {
+    const { stdout } = await runAgent(
+      path.join(AGENTS_DIR, "collabator"),
+      "serve.py",
+      [],
+      { owner, repo, issue_number: issueNumber },
+      { GITHUB_TOKEN: req.session.githubToken }
+    );
+    res.json(extractJson(stdout));
+  } catch (err) {
+    console.error("contributor agent error:", err);
+    res.status(500).json({ error: `Contributor agent failed: ${err.message}` });
+  }
+});
+
 module.exports = router;
 module.exports.runAgent = runAgent;
 module.exports.extractJson = extractJson;
