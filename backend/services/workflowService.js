@@ -1,4 +1,4 @@
-const { Issue, AgentRun } = require("../models");
+const { Issue, AgentRun, IssueTimeline } = require("../models");
 
 const fallbackIssues = new Map();
 const fallbackRuns = new Map();
@@ -74,4 +74,18 @@ async function saveAgentRun(issueRecord, state, agentName, result, status = "com
   fallbackRuns.set(`${issueRecord.repoFullName || ""}#${issueRecord.number}:${agentName}`, values);
 }
 
-module.exports = { ensureIssue, saveWorkflow, saveAgentRun };
+async function saveIssueTimeline(issueRecord, eventType, actor, body) {
+  if (!issueRecord?.id || !IssueTimeline) return false;
+  try {
+    const [, created] = await IssueTimeline.findOrCreate({
+      where: { issueId: issueRecord.id, eventType },
+      defaults: { actor: actor || "unknown", body: body || "" },
+    });
+    return created;
+  } catch (error) {
+    console.error("Workflow database timeline write failed:", error.message);
+    return false;
+  }
+}
+
+module.exports = { ensureIssue, saveWorkflow, saveAgentRun, saveIssueTimeline };

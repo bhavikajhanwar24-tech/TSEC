@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const express = require("express");
 const path = require("path");
 const { runAgentJob } = require("./agents");
-const { ensureIssue, saveWorkflow, saveAgentRun } = require("../services/workflowService");
+const { ensureIssue, saveWorkflow, saveAgentRun, saveIssueTimeline } = require("../services/workflowService");
 
 const router = express.Router();
 const duplicateAgentDir = path.join(__dirname, "..", "Agents", "Duplicate_agent");
@@ -33,7 +33,7 @@ function isHumanIssueComment(payload) {
 async function getPersistedAnalysis(owner, repo, number) {
   try {
     const { Issue } = require("../models");
-    const issue = await Issue.findOne({ where: { repoFullName: `${owner}/${repo}`, number }, include: [{ association: "agentRuns" }] });
+    const issue = await Issue.findOne({ where: { repoFullName: `${owner}/${repo}`, number }, include: [{ association: "agentRuns" }, { association: "timelines" }] });
     if (!issue) return null;
     return {
       issue: issue.toJSON(),
@@ -42,6 +42,9 @@ async function getPersistedAnalysis(owner, repo, number) {
       step: issue.workflowStep,
       output: issue.workflowOutput,
       agents: Object.fromEntries((issue.agentRuns || []).map((run) => [run.agentName, { status: run.status, result: run.output, error: run.status === "failed" ? run.reasoning : undefined }])),
+      comments: (issue.timelines || [])
+        .filter((timeline) => timeline.eventType.startsWith("github_comment:"))
+        .map((timeline) => ({ actor: timeline.actor, body: timeline.body, createdAt: timeline.createdAt })),
     };
   } catch (error) {
     console.error("Workflow database read failed:", error.message);
@@ -192,6 +195,20 @@ router.post(["/github", "/"], async (req, res) => {
   }
 
   await ensureIssue(issue, repository.owner.login, repository.name);
+
+  if (reporterReply) {
+    const issueRecord = await ensureIssue(issue, repository.owner.login, repository.name);
+    const comment = req.body.comment || {};
+    const commentWasStored = await saveIssueTimeline(
+      issueRecord,
+      `github_comment:${comment.id || req.get("x-github-delivery")}`,
+      comment.user?.login || req.body.sender?.login,
+      comment.body,
+    );
+    if (!commentWasStored) {
+      return res.status(202).json({ accepted: true, processed: false, duplicate: true, issue: issue.number });
+    }
+  }
 
   if (!process.env.GITHUB_TOKEN) {
     console.error("Duplicate webhook skipped: GITHUB_TOKEN is not configured");
