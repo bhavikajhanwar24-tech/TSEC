@@ -2123,8 +2123,10 @@ function CentralAnalysisDashboard({
                       <summary>Agent reasons and evidence</summary>
                       {(escalation.agentRuns || []).map((run) => <DecisionRecord key={run.id} run={run} onFeedback={onFeedback} />)}
                     </details>
-                    <ModeratorPanel context={moderator} onAction={onModeratorAction} />
                   </section>
+                )}
+                {moderator && (
+                  <ModeratorPanel context={moderator} onAction={onModeratorAction} />
                 )}
                 {error && <p className="detail-error">{error}</p>}
                 <section className="analysis-content-grid">
