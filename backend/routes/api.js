@@ -155,13 +155,33 @@ router.get("/repos/:owner/:repo/details", async (req, res) => {
     if (!repoResponse.ok) return res.status(repoResponse.status).json({ error: "Repo not found" });
 
     const repoData = await repoResponse.json();
+    const contributorFallback = commits.reduce((byLogin, commit) => {
+      const login = commit.author?.login || commit.commit?.author?.name;
+      if (!login) return byLogin;
+      const current = byLogin.get(login) || {
+        id: `commit-author-${login}`,
+        login,
+        avatar_url: commit.author?.avatar_url || "",
+        contributions: 0,
+      };
+      current.contributions += 1;
+      byLogin.set(login, current);
+      return byLogin;
+    }, new Map());
+    const normalizedContributors = contributors.length
+      ? contributors.map((contributor) => ({
+        ...contributor,
+        login: contributor.login || contributor.name || "Anonymous contributor",
+        contributions: Number(contributor.contributions) || 0,
+      }))
+      : [...contributorFallback.values()].sort((left, right) => right.contributions - left.contributions);
 
     res.json({
       repo: repoData,
       issues,
       pulls,
       commits,
-      contributors,
+      contributors: normalizedContributors,
       codeFrequency: Array.isArray(codeFrequency.data) ? codeFrequency.data : [],
       codeFrequencyPending: codeFrequency.pending,
     });
