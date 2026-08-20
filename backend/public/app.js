@@ -199,6 +199,13 @@ function renderRepos(repos) {
 }
 
 async function init() {
+  if (!window.API_BASE_URL) {
+    document.body.insertAdjacentHTML(
+      "afterbegin",
+      '<div class="config-error">config.js not loaded — copy backend/public/config.example.js to backend/public/config.js and set window.API_BASE_URL to your deployed backend URL.</div>'
+    );
+    return;
+  }
   document.getElementById("login-btn").href = `${API_BASE}/auth/github`;
   try {
     const user = await api("/auth/me");
