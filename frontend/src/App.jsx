@@ -74,6 +74,34 @@ function CodeChanges({ values, pending }) {
   return <div className="chart"><div className="chart-bars">{points.map((point) => <div className="bar-group" key={point[0]} title={`${point[1]} additions, ${Math.abs(point[2])} deletions`}><span className="bar additions" style={{ height: `${(point[1] / max) * 100}%` }} /><span className="bar deletions" style={{ height: `${(Math.abs(point[2]) / max) * 100}%` }} /></div>)}</div><div className="chart-legend"><span><i className="legend-additions" /> Additions</span><span><i className="legend-deletions" /> Deletions</span></div></div>
 }
 
+function RepositoryChat({ owner, repo }) {
+  const [question, setQuestion] = useState('')
+  const [messages, setMessages] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const suggestions = ['Which issues are waiting for information?', 'What problems were solved recently?', 'Which PRs relate to security?']
+
+  async function ask(event) {
+    event.preventDefault()
+    const value = question.trim()
+    if (!value || loading) return
+    setQuestion('')
+    setError('')
+    setMessages((current) => [...current, { role: 'user', text: value }])
+    setLoading(true)
+    try {
+      const result = await api(`/api/repos/${owner}/${repo}/chat`, { method: 'POST', body: { question: value } })
+      setMessages((current) => [...current, { role: 'assistant', text: result.answer, sources: result.sources || [] }])
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return <section className="repo-chat panel"><div className="chat-heading"><div><p className="eyebrow">Repository memory</p><h2>Ask about this repository</h2><p>Search issues, pull requests, workflow decisions, and solved history.</p></div><span className="chat-status">RAG enabled</span></div><div className="chat-suggestions">{suggestions.map((suggestion) => <button type="button" key={suggestion} onClick={() => setQuestion(suggestion)}>{suggestion}</button>)}</div><div className="chat-transcript" aria-live="polite">{!messages.length && <EmptyState>Ask a repository question to see grounded history.</EmptyState>}{messages.map((message, index) => <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}><span className="chat-role">{message.role === 'user' ? 'You' : 'RepoGuardian'}</span><p>{message.text}</p>{message.sources?.length > 0 && <div className="chat-sources">{message.sources.map((source) => <span key={source.source}>{source.source}</span>)}</div>}</div>)}{loading && <div className="chat-message assistant"><span className="chat-role">RepoGuardian</span><p className="chat-loading">Searching repository history...</p></div>}</div>{error && <p className="detail-error">{error}</p>}<form className="chat-form" onSubmit={ask}><textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about issues, PRs, fixes, or workflow history..." rows="2" maxLength="1200" /><button className="primary-button" type="submit" disabled={loading || !question.trim()}>{loading ? 'Searching...' : 'Ask'}</button></form></section>
+}
+
 const automaticAgents = [
   ['duplicate', 'Duplicate check', 'Compares this issue with open issue history.'],
   ['missingInfo', 'Missing information', 'Checks whether the report is actionable.'],
@@ -149,6 +177,7 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
       {activeTab === 'Contributors' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">People behind the code</p><h2>Contributors</h2></div><span className="count-label">{contributors.length} people</span></div>{contributors.map((contributor) => <ContributorRow contributor={contributor} key={contributor.id} />)}{!contributors.length && <EmptyState>No contributor data found.</EmptyState>}</div>}
       {activeTab === 'Code changes' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Repository activity</p><h2>Code changes</h2></div><span className="count-label">Weekly view</span></div><CodeChanges values={codeFrequency} pending={codeFrequencyPending} /></div>}
     </section>
+    <RepositoryChat owner={repo.owner.login} repo={repo.name} />
     {selectedIssue && <AgentAnalysisView owner={repo.owner.login} repo={repo.name} issue={selectedIssue} onClose={() => setSelectedIssue(null)} />}
   </div>
 }
