@@ -86,6 +86,13 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .state-dot.open { background: #eaf9f1; color: var(--green); }
 .state-dot.closed { background: #f0f2f5; color: var(--muted); }
 .row-state { color: var(--muted); font-size: 11px; margin-left: auto; text-transform: capitalize; }
+.issue-button:disabled { cursor: default; opacity: 1; }
+.workflow-badge { border-radius: 12px; color: var(--muted); font-size: 10px; margin-left: auto; padding: 5px 8px; text-transform: capitalize; white-space: nowrap; }
+.workflow-badge.running { background: #eef2ff; color: var(--blue); }
+.workflow-badge.waiting_missing_info { background: #fff7e7; color: #b87900; }
+.workflow-badge.complete { background: #eaf9f1; color: var(--green); }
+.workflow-badge.stopped_duplicate { background: #fff1f1; color: #b33b3b; }
+.workflow-badge.not-triggered { background: #f0f2f5; }
 .contribution-bar { background: #eef2f5; border-radius: 10px; height: 6px; margin-left: auto; overflow: hidden; width: 150px; }
 .contribution-bar span { background: var(--blue); border-radius: inherit; display: block; height: 100%; }
 .chart { padding: 20px 0 5px; }

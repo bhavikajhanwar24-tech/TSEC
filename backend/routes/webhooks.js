@@ -43,6 +43,24 @@ async function getPersistedAnalysis(owner, repo, number) {
   }
 }
 
+async function getWorkflowStatuses(owner, repo) {
+  const statuses = Object.values(Object.fromEntries(
+    [...analyses.entries()]
+      .filter(([key]) => key.startsWith(`${owner}/${repo}#`))
+      .map(([key, record]) => [key.split("#")[1], { number: key.split("#")[1], status: record.status, step: record.step }])
+  ));
+  try {
+    const { Issue } = require("../models");
+    const records = await Issue.findAll({ where: { repoFullName: `${owner}/${repo}` }, attributes: ["number", "workflowStatus", "workflowStep"] });
+    const byNumber = new Map(statuses.map((item) => [String(item.number), item]));
+    records.forEach((record) => byNumber.set(String(record.number), { number: record.number, status: record.workflowStatus, step: record.workflowStep }));
+    return [...byNumber.values()];
+  } catch (error) {
+    console.error("Workflow status read failed:", error.message);
+    return statuses;
+  }
+}
+
 async function startAgent(name, agentDir, script, args, stdinPayload, env, record) {
   record.agents[name] = { status: "running", startedAt: new Date().toISOString() };
   try {
@@ -159,11 +177,14 @@ router.post("/github", async (req, res) => {
   let existing = getAnalysis(repository.owner.login, repository.name, issue.number);
   if (!existing) existing = await getPersistedAnalysis(repository.owner.login, repository.name, issue.number);
   const isResume = reporterReply || req.body.action === "edited";
-  if (isResume && existing?.status !== "waiting_missing_info") {
-    return res.status(202).json({ accepted: true, processed: false, issue: issue.number });
-  }
+  if (isResume && existing?.status === "stopped_duplicate") return res.status(202).json({ accepted: true, processed: false, issue: issue.number });
   const record = await createAnalysis(issue, repository, process.env.GITHUB_TOKEN);
   res.status(202).json({ accepted: true, processed: true, issue: issue.number });
+});
+
+router.get("/analysis/:owner/:repo", async (req, res) => {
+  if (!req.session?.githubToken) return res.status(401).json({ error: "Not authenticated" });
+  res.json({ statuses: await getWorkflowStatuses(req.params.owner, req.params.repo) });
 });
 
 router.get("/analysis/:owner/:repo/:number", async (req, res) => {

@@ -34,8 +34,9 @@ function EmptyState({ children }) {
   return <div className="empty-state">{children}</div>
 }
 
-function IssueRow({ item, pull = false, onClick }) {
-  return <button className="activity-row issue-button" type="button" onClick={() => onClick?.(item)}><span className={`state-dot ${item.state === 'open' ? 'open' : 'closed'}`}>{pull ? '↗' : '#'}</span><div><h3>{item.title}</h3><p>#{item.number} opened by {item.user?.login || 'unknown'} · {formatDate(item.created_at)}</p></div><span className="row-state">{item.state}</span><span className="issue-arrow">→</span></button>
+function IssueRow({ item, pull = false, onClick, workflowStatus }) {
+  const canOpenAnalysis = Boolean(workflowStatus)
+  return <button className="activity-row issue-button" type="button" disabled={!canOpenAnalysis} onClick={() => canOpenAnalysis && onClick?.(item)}><span className={`state-dot ${item.state === 'open' ? 'open' : 'closed'}`}>{pull ? '↗' : '#'}</span><div><h3>{item.title}</h3><p>#{item.number} opened by {item.user?.login || 'unknown'} · {formatDate(item.created_at)}</p></div><span className="row-state">{item.state}</span><span className={`workflow-badge ${workflowStatus || 'not-triggered'}`}>{workflowStatus ? workflowStatus.replaceAll('_', ' ') : 'not triggered'}</span>{canOpenAnalysis && <span className="issue-arrow">→</span>}</button>
 }
 
 function CommitRow({ commit, owner, repo }) {
@@ -118,6 +119,13 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
   const openPulls = pulls.filter((pull) => pull.state === 'open')
   const languages = Object.keys(repo.language ? { [repo.language]: true } : {})
   const [selectedIssue, setSelectedIssue] = useState(null)
+  const [workflowStatuses, setWorkflowStatuses] = useState({})
+
+  useEffect(() => {
+    api(`/api/webhooks/analysis/${repo.owner.login}/${repo.name}`).then(({ statuses }) => {
+      setWorkflowStatuses(Object.fromEntries(statuses.map((item) => [item.number, item.status])))
+    }).catch(() => setWorkflowStatuses({}))
+  }, [repo.owner.login, repo.name])
 
   return <div className="detail-page">
     <button className="back-button" type="button" onClick={onBack}>← All repositories</button>
@@ -129,7 +137,7 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
     <nav className="tabs" aria-label="Repository sections">{tabs.map((tab) => <button className={activeTab === tab ? 'active' : ''} type="button" key={tab} onClick={() => setActiveTab(tab)}>{tab}{tab === 'Issues' && <small>{issues.length}</small>}{tab === 'Pull requests' && <small>{pulls.length}</small>}</button>)}</nav>
     <section className="tab-content">
       {activeTab === 'Overview' && <div className="overview-grid"><div className="panel"><p className="eyebrow">About this repository</p><h2>Project snapshot</h2><dl className="details-list"><div><dt>Default branch</dt><dd>{repo.default_branch}</dd></div><div><dt>License</dt><dd>{repo.license?.name || 'Not specified'}</dd></div><div><dt>Created</dt><dd>{formatDate(repo.created_at)}</dd></div><div><dt>Last updated</dt><dd>{formatDate(repo.updated_at)}</dd></div></dl></div><div className="panel"><p className="eyebrow">Project signals</p><h2>At a glance</h2><div className="signal-list"><div><span>Primary language</span><strong>{languages[0] || 'Not specified'}</strong></div><div><span>Repository size</span><strong>{Math.round(repo.size / 1024)} MB</strong></div><div><span>Visibility</span><strong>{repo.private ? 'Private' : 'Public'}</strong></div></div></div></div>}
-      {activeTab === 'Issues' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Work tracking</p><h2>Issues</h2></div><span className="count-label">{issues.length} total · click to inspect</span></div>{issues.filter((issue) => !issue.pull_request).map((issue) => <IssueRow item={issue} onClick={setSelectedIssue} key={issue.id} />)}{!issues.filter((issue) => !issue.pull_request).length && <EmptyState>No issues found.</EmptyState>}</div>}
+      {activeTab === 'Issues' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Work tracking</p><h2>Issues</h2></div><span className="count-label">{issues.length} total · new issues analyze automatically</span></div>{issues.filter((issue) => !issue.pull_request).map((issue) => <IssueRow item={issue} workflowStatus={workflowStatuses[issue.number]} onClick={setSelectedIssue} key={issue.id} />)}{!issues.filter((issue) => !issue.pull_request).length && <EmptyState>No issues found.</EmptyState>}</div>}
       {activeTab === 'Pull requests' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Code review</p><h2>Pull requests</h2></div><span className="count-label">{openPulls.length} open</span></div>{pulls.map((pull) => <IssueRow item={pull} pull key={pull.id} />)}{!pulls.length && <EmptyState>No pull requests found.</EmptyState>}</div>}
       {activeTab === 'Commits' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Repository history</p><h2>Recent commits</h2></div><span className="count-label">Latest 30</span></div>{commits.map((commit) => <CommitRow commit={commit} owner={repo.owner.login} repo={repo.name} key={commit.sha} />)}{!commits.length && <EmptyState>No commits found.</EmptyState>}</div>}
       {activeTab === 'Contributors' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">People behind the code</p><h2>Contributors</h2></div><span className="count-label">{contributors.length} people</span></div>{contributors.map((contributor) => <ContributorRow contributor={contributor} key={contributor.id} />)}{!contributors.length && <EmptyState>No contributor data found.</EmptyState>}</div>}
