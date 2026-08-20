@@ -211,6 +211,71 @@ router.post("/sentiment-analysis", requireAuth, async (req, res) => {
   }
 });
 
+// Repo-level health runs (keyed by owner/repo) so the sidebar Health panel
+// can start a sweep and poll its progress without tying it to an issue event.
+const healthRuns = new Map();
+
+function healthKey(owner, repo) {
+  return `${owner}/${repo}`;
+}
+
+// POST /api/agents/health-run
+// Body: { owner, repo, weeks? }
+// Starts the Health-Trend Investigator in the background and returns the
+// running record immediately; poll GET /health-run for the result.
+router.post("/health-run", requireAuth, (req, res) => {
+  const { owner, repo, weeks } = req.body || {};
+  if (!owner || !repo) {
+    return res.status(400).json({ error: "owner and repo are required" });
+  }
+
+  const key = healthKey(owner, repo);
+  const existing = healthRuns.get(key);
+  if (existing && existing.status === "running") {
+    return res.status(202).json(existing);
+  }
+
+  const record = { status: "running", startedAt: new Date().toISOString() };
+  healthRuns.set(key, record);
+
+  const args = ["--owner", owner, "--repo", repo];
+  if (weeks) args.push("--weeks", String(weeks));
+
+  runAgent(
+    path.join(AGENTS_DIR, "Health_agent"),
+    "health_agent.py",
+    args,
+    undefined,
+    { GITHUB_TOKEN: req.session.githubToken },
+    240000,
+  )
+    .then(({ stdout }) => {
+      record.status = "complete";
+      record.completedAt = new Date().toISOString();
+      record.result = extractJson(stdout);
+    })
+    .catch((err) => {
+      record.status = "failed";
+      record.completedAt = new Date().toISOString();
+      record.error = err.message;
+    });
+
+  return res.status(202).json(record);
+});
+
+// GET /api/agents/health-run?owner=&repo=
+router.get("/health-run", requireAuth, (req, res) => {
+  const { owner, repo } = req.query || {};
+  if (!owner || !repo) {
+    return res.status(400).json({ error: "owner and repo are required" });
+  }
+  const record = healthRuns.get(healthKey(owner, repo));
+  if (!record) {
+    return res.status(404).json({ error: "No health sweep has been run for this repository yet." });
+  }
+  res.json(record);
+});
+
 module.exports = router;
 module.exports.runAgent = runAgent;
 module.exports.extractJson = extractJson;

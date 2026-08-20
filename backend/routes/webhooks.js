@@ -119,7 +119,6 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
     ["sensitivity", agentDirs.sensitivity, "sensitivity_agent.py", ["--owner", owner, "--repo", repo, "--issue-json", "-"], issue],
     ["sentiment", agentDirs.sentiment, "serve.py", [], { owner, repo, issueNumber: issue.number, repo_norms: {} }],
     ["backlog", agentDirs.backlog, "serve.py", [], { owner, repo, repo_norms: {} }, 240000],
-    ["health", agentDirs.health, "health_agent.py", ["--owner", owner, "--repo", repo], undefined, 240000],
   ];
   let nextStep = record.step;
   async function runStep([name, dir, script, args, payload, timeoutMs]) {

@@ -328,6 +328,9 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .health-narrative { font-size: 15px; line-height: 1.55; }
 .evidence-mark.inactive { color: var(--warning); }
 .backlog-detail { margin-top: 4px; }
+.health-panel-toolbar { align-items: center; display: flex; gap: 12px; justify-content: space-between; margin-bottom: 16px; }
+.health-panel-result { margin-top: 18px; }
+.agent-status.idle { background: var(--surface-soft); }
 .backlog-action-list { display: grid; gap: 10px; }
 .backlog-action-card { background: var(--surface-soft); border: 1px solid var(--line); border-radius: 9px; padding: 12px 13px; }
 .backlog-action-heading { align-items: center; display: flex; gap: 10px; justify-content: space-between; margin-bottom: 6px; }

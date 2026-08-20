@@ -9,6 +9,7 @@ const tabs = [
   "Pull requests",
   "Commits",
   "Contributors",
+  "Health",
   "Code changes",
 ];
 
@@ -388,11 +389,6 @@ const automaticAgents = [
     "backlog",
     "Backlog context",
     "Places the issue in repository-wide work context.",
-  ],
-  [
-    "health",
-    "Repository health",
-    "Tracks response times, backlog, contributors, and trends.",
   ],
 ];
 
@@ -891,6 +887,114 @@ function HealthTrendDetail({ result }) {
               </span>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HealthPanel({ owner, repo }) {
+  const [run, setRun] = useState(null);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState("");
+
+  const fetchRun = () => {
+    api(
+      `/api/agents/health-run?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`,
+    )
+      .then((data) => setRun(data))
+      .catch(() => setRun(null));
+  };
+
+  useEffect(() => {
+    fetchRun();
+  }, [owner, repo]);
+
+  useEffect(() => {
+    if (run?.status !== "running") return undefined;
+    const timer = setInterval(fetchRun, 3000);
+    return () => clearInterval(timer);
+  }, [run?.status, owner, repo]);
+
+  const runHealth = async () => {
+    setStarting(true);
+    setError("");
+    try {
+      await api("/api/agents/health-run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner, repo }),
+      });
+      fetchRun();
+    } catch {
+      setError("Failed to start the health sweep.");
+    }
+    setStarting(false);
+  };
+
+  const result = run?.result;
+  return (
+    <div className="panel health-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Scheduled agent</p>
+          <h2>Health-Trend Investigator</h2>
+        </div>
+        <span className="count-label">
+          weekly sweep · response time · backlog · contributors
+        </span>
+      </div>
+      <div className="health-panel-toolbar">
+        <span className={`agent-status ${run?.status || "idle"}`}>
+          {run?.status || "idle"}
+        </span>
+        <button
+          className="outline-button"
+          type="button"
+          onClick={runHealth}
+          disabled={starting || run?.status === "running"}
+        >
+          {run?.status === "running" || starting
+            ? "Running…"
+            : "Run health sweep"}
+        </button>
+      </div>
+      {error && <p className="detail-error">{error}</p>}
+      {run?.status === "running" && (
+        <div className="waiting-detail">
+          <span className="waiting-orbit">◌</span>
+          <strong>Running weekly health sweep…</strong>
+          <p>
+            Fetching issues, pull requests, and contributor activity across the
+            repository. This can take a minute.
+          </p>
+        </div>
+      )}
+      {run?.status === "complete" && result && (
+        <div className="health-panel-result">
+          {result.health_summary && (
+            <div className="result-recommendation health-narrative">
+              <Markdown text={result.health_summary} />
+            </div>
+          )}
+          <HealthTrendDetail result={result} />
+        </div>
+      )}
+      {run?.status === "failed" && (
+        <div className="waiting-detail">
+          <span className="waiting-orbit">✕</span>
+          <strong>Health sweep failed</strong>
+          <p>{run.error}</p>
+        </div>
+      )}
+      {!run && (
+        <div className="waiting-detail">
+          <span className="waiting-orbit">♥</span>
+          <strong>No health sweep run yet</strong>
+          <p>
+            Run the Health-Trend Investigator to see the repository health
+            dashboard with trend charts and root-cause analysis.
+          </p>
         </div>
       )}
     </div>
@@ -1785,7 +1889,9 @@ function RepositoryOverviewDashboard({
                           ? "↗"
                           : tab === "Contributors"
                             ? "◎"
-                            : "▥"}
+                            : tab === "Health"
+                              ? "♥"
+                              : "▥"}
                 </span>
                 {tab}
                 {tab === "Issues" && <small>{issues.length}</small>}
@@ -2036,6 +2142,7 @@ function RepositoryTabDashboard({
       Number(escalationDecisions[first.number]?.aggregateConfidence || 0),
   );
   const content = {
+    Health: <HealthPanel owner={repo.owner.login} repo={repo.name} />,
     Issues: (
       <div className="panel">
         <div className="panel-heading">
@@ -2204,7 +2311,9 @@ function RepositoryTabDashboard({
                           ? "↗"
                           : tab === "Contributors"
                             ? "◎"
-                            : "▥"}
+                            : tab === "Health"
+                              ? "♥"
+                              : "▥"}
                 </span>
                 {tab}
                 {tab === "Issues" && <small>{issues.length}</small>}
