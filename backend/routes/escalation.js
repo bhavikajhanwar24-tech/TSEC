@@ -5,6 +5,10 @@ const { normalizeCategory } = require("../Agents/escalation_aggregator/scoringRu
 
 const router = express.Router();
 
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 router.get("/:owner/:repo/escalations", async (req, res) => {
   if (!req.session?.githubToken) return res.status(401).json({ error: "Not authenticated" });
   try {
@@ -24,8 +28,11 @@ router.get("/:issueId/escalation", async (req, res) => {
   if (!req.session?.githubToken) return res.status(401).json({ error: "Not authenticated" });
   try {
     const { Issue } = require("../models");
-    const issue = await Issue.findOne({ where: { id: req.params.issueId } }) || await Issue.findOne({ where: { githubIssueId: String(req.params.issueId) } });
+    const issue = isUuid(req.params.issueId)
+      ? await Issue.findOne({ where: { id: req.params.issueId } })
+      : await Issue.findOne({ where: { githubIssueId: String(req.params.issueId) } });
     const resolvedIssueId = issue?.id || req.params.issueId;
+    if (!issue) return res.status(404).json({ error: "Issue not found" });
     const decision = await EscalationDecision.findOne({ where: { issueId: resolvedIssueId } });
     if (decision) return res.json({ pending: false, ...decision.toJSON() });
 

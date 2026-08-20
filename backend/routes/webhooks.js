@@ -81,12 +81,16 @@ async function getWorkflowStatuses(owner, repo) {
 
 async function startAgent(name, agentDir, script, args, stdinPayload, env, record, step, timeoutMs) {
   record.agents[name] = { status: "running", startedAt: new Date().toISOString() };
+  await saveWorkflow(record.issueRecord, { step, status: "running", output: record });
+  console.log(`Starting ${name} agent for ${record.repository.owner}/${record.repository.name}#${record.issue.number}`);
   try {
     const result = await runAgentJob(agentDir, script, args, stdinPayload, env, timeoutMs);
+    console.log(`Completed ${name} agent for ${record.repository.owner}/${record.repository.name}#${record.issue.number}`);
     record.agents[name] = { status: "complete", result, completedAt: new Date().toISOString() };
     await saveAgentRun(record.issueRecord, { step, status: "running" }, name, result);
     return result;
   } catch (error) {
+    console.error(`Failed ${name} agent for ${record.repository.owner}/${record.repository.name}#${record.issue.number}:`, error.message);
     record.agents[name] = { status: "failed", error: error.message, completedAt: new Date().toISOString() };
     await saveAgentRun(record.issueRecord, { step, status: "complete_with_errors" }, name, { error: error.message }, "failed");
     return { error: error.message };
