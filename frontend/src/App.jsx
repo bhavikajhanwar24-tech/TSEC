@@ -445,29 +445,46 @@ function resultEvidence(result = {}) {
   );
 }
 
-function TrendChart({ title, labels, values, color, format }) {
+function TrendChart({
+  title,
+  labels,
+  values,
+  color,
+  format,
+  markerIndex,
+  projection,
+}) {
   const w = 280;
   const h = 88;
   const pad = 8;
   const safe = values.map((v) => Number(v) || 0);
-  const max = Math.max(...safe, 1);
-  const step = (w - 2 * pad) / Math.max(1, safe.length - 1);
-  const pts = safe.map((v, i) => [
-    pad + i * step,
-    h - pad - (v / max) * (h - 2 * pad),
-  ]);
+  const proj = projection ? projection.map((v) => Number(v) || 0) : [];
+  const max = Math.max(...safe, ...proj, 1);
+  const total = Math.max(1, safe.length + proj.length - 1);
+  const step = (w - 2 * pad) / total;
+  const xOf = (i) => pad + i * step;
+  const yOf = (v) => h - pad - (v / max) * (h - 2 * pad);
+  const pts = safe.map((v, i) => [xOf(i), yOf(v)]);
   const line = pts
     .map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`)
     .join(" ");
   const last = pts[pts.length - 1];
   const area = `${line} L${last[0].toFixed(1)},${h - pad} L${pts[0][0].toFixed(1)},${h - pad} Z`;
+  const projLine =
+    proj.length > 0
+      ? `M${last[0].toFixed(1)},${last[1].toFixed(1)} ${proj
+          .map((v, i) => `L${xOf(safe.length + i).toFixed(1)},${yOf(v).toFixed(1)}`)
+          .join(" ")}`
+      : "";
+  const marker =
+    markerIndex != null && markerIndex >= 0 && markerIndex < pts.length
+      ? pts[markerIndex]
+      : null;
   return (
     <div className="health-chart-card">
       <div className="health-chart-heading">
         <strong>{title}</strong>
-        <span>
-          {format ? format(safe[safe.length - 1]) : safe[safe.length - 1]}
-        </span>
+        <span>{format ? format(safe[safe.length - 1]) : safe[safe.length - 1]}</span>
       </div>
       <svg
         viewBox={`0 0 ${w} ${h}`}
@@ -484,6 +501,16 @@ function TrendChart({ title, labels, values, color, format }) {
           strokeLinejoin="round"
           strokeLinecap="round"
         />
+        {projLine && (
+          <path
+            d={projLine}
+            fill="none"
+            stroke={color}
+            strokeWidth="1.6"
+            strokeDasharray="3 3"
+            opacity="0.7"
+          />
+        )}
         {pts.map(([x, y], i) => (
           <circle
             key={i}
@@ -495,7 +522,148 @@ function TrendChart({ title, labels, values, color, format }) {
             <title>{`${labels[i]}: ${format ? format(safe[i]) : safe[i]}`}</title>
           </circle>
         ))}
+        {marker && (
+          <g>
+            <circle
+              cx={marker[0].toFixed(1)}
+              cy={marker[1].toFixed(1)}
+              r="4.5"
+              fill="none"
+              stroke="#fff"
+              strokeWidth="1.4"
+            />
+            <circle
+              cx={marker[0].toFixed(1)}
+              cy={marker[1].toFixed(1)}
+              r="2.6"
+              fill="#e5a13c"
+            />
+          </g>
+        )}
       </svg>
+      <div className="health-chart-labels">
+        <span>{labels[0]}</span>
+        <span>{labels[labels.length - 1]}</span>
+      </div>
+    </div>
+  );
+}
+
+function HealthScoreGauge({ score, status }) {
+  const s = Math.max(0, Math.min(100, Number(score) || 0));
+  const label = status || (s >= 80 ? "Healthy" : s >= 60 ? "Watch" : "Declining");
+  const color =
+    label === "Healthy" ? "#2f9e6e" : label === "Watch" ? "#e5a13c" : "#e5484d";
+  const r = 34;
+  const c = 2 * Math.PI * r;
+  return (
+    <div className="health-gauge">
+      <div className="health-gauge-ring-wrap">
+        <svg viewBox="0 0 96 96" className="health-gauge-ring">
+          <circle cx="48" cy="48" r={r} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="8" />
+          <circle
+            cx="48"
+            cy="48"
+            r={r}
+            fill="none"
+            stroke={color}
+            strokeWidth="8"
+            strokeLinecap="round"
+            strokeDasharray={`${(s / 100) * c} ${c}`}
+            transform="rotate(-90 48 48)"
+          />
+        </svg>
+        <div className="health-gauge-value">
+          <strong style={{ color }}>{s}</strong>
+          <span>{label}</span>
+        </div>
+      </div>
+      <div className="health-gauge-caption">
+        <strong>Repository health score</strong>
+        <span>
+          {label === "Healthy"
+            ? "All tracked metrics within baseline."
+            : label === "Watch"
+              ? "One or more metrics degrading — investigate."
+              : "Multiple metrics declining — intervention needed."}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function projectSeries(values, points = 3) {
+  const src = values.slice(-4);
+  const n = src.length;
+  if (n < 2) return [];
+  const meanX = (n - 1) / 2;
+  const meanY = src.reduce((a, b) => a + b, 0) / n;
+  const denom = src.reduce((acc, v, i) => acc + (i - meanX) ** 2, 0);
+  const slope = denom
+    ? src.reduce((acc, v, i) => acc + (i - meanX) * (v - meanY), 0) / denom
+    : 0;
+  const last = src[n - 1];
+  return Array.from({ length: points }, (_, i) =>
+    Math.max(0, Math.round(last + slope * (i + 1))),
+  );
+}
+
+function BacklogFlowChart({ labels, opened, closed, backlog, color }) {
+  const w = 280;
+  const h = 100;
+  const pad = 8;
+  const safeOpen = opened.map((v) => Number(v) || 0);
+  const safeClosed = closed.map((v) => Number(v) || 0);
+  const safeBacklog = backlog.map((v) => Number(v) || 0);
+  const proj = projectSeries(safeBacklog);
+  const max = Math.max(...safeOpen, ...safeClosed, ...safeBacklog, ...proj, 1);
+  const step = (w - 2 * pad) / Math.max(1, safeOpen.length + proj.length - 1);
+  const xOf = (i) => pad + i * step;
+  const yOf = (v) => h - pad - (v / max) * (h - 2 * pad);
+  const bottom = safeClosed.map((v, i) => [xOf(i), yOf(v)]);
+  const top = safeOpen.map((v, i) => [xOf(i), yOf(v + (safeClosed[i] || 0))]);
+  const stackedArea = `${bottom
+    .map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(" ")} ${top
+    .slice()
+    .reverse()
+    .map(([x, y]) => `L${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(" ")} Z`;
+  const backlogPts = safeBacklog.map((v, i) => [xOf(i), yOf(v)]);
+  const backlogLine = backlogPts
+    .map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(" ");
+  const projLine =
+    proj.length > 0
+      ? `M${backlogPts[backlogPts.length - 1][0].toFixed(1)},${backlogPts[backlogPts.length - 1][1].toFixed(1)} ${proj
+          .map((v, i) => `L${xOf(safeOpen.length + i).toFixed(1)},${yOf(v).toFixed(1)}`)
+          .join(" ")}`
+      : "";
+  return (
+    <div className="health-chart-card">
+      <div className="health-chart-heading">
+        <strong>Backlog flow (opened vs. closed)</strong>
+        <span>{safeBacklog[safeBacklog.length - 1]} open</span>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="health-chart" role="img" aria-label="Backlog flow: opened vs closed per week with backlog forecast">
+        <path d={stackedArea} fill="#2f9e6e" opacity="0.22" />
+        <path d={stackedArea} fill="none" stroke="#2f9e6e" strokeWidth="1" opacity="0.5" />
+        <path d={backlogLine} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" />
+        {projLine && (
+          <path d={projLine} fill="none" stroke={color} strokeWidth="1.6" strokeDasharray="3 3" opacity="0.7" />
+        )}
+        {backlogPts.map(([x, y], i) => (
+          <circle key={i} cx={x.toFixed(1)} cy={y.toFixed(1)} r="2" fill={color}>
+            <title>{`${labels[i]}: backlog ${safeBacklog[i]}`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div className="health-chart-legend">
+        <span><i style={{ background: color }} /> backlog size</span>
+        <span><i style={{ background: "#2f9e6e" }} /> opened</span>
+        <span><i style={{ background: "#3b82f6" }} /> closed</span>
+        <span><i style={{ background: "transparent", border: "1px dashed #fff" }} /> forecast</span>
+      </div>
       <div className="health-chart-labels">
         <span>{labels[0]}</span>
         <span>{labels[labels.length - 1]}</span>
@@ -508,48 +676,129 @@ function HealthTrendDetail({ result }) {
   const series = result.series || {};
   const labels = result.week_labels || [];
   const contributors = result.contributor_activity || [];
-  const charts = [
-    {
-      key: "time_to_first_response_days",
-      title: "Median time-to-first-response",
-      color: "#e5484d",
-      format: (v) => `${v} days`,
-    },
-    {
-      key: "backlog_size",
-      title: "Open backlog",
-      color: "#8e4ec6",
-      format: (v) => `${v} issues`,
-    },
-    {
-      key: "incoming_volume",
-      title: "Incoming issues / week",
-      color: "#2f9e6e",
-      format: (v) => `${v}`,
-    },
-    {
-      key: "active_contributors",
-      title: "Active contributors / week",
-      color: "#3b82f6",
-      format: (v) => `${v}`,
-    },
-  ].filter((c) => Array.isArray(series[c.key]) && series[c.key].length > 1);
+  const has = (key) => Array.isArray(series[key]) && series[key].length > 1;
+  const last = (key) => {
+    const values = series[key];
+    return Array.isArray(values) && values.length ? values[values.length - 1] : 0;
+  };
+  const responseTrend = (result.trends || []).find(
+    (t) => t.metric === "time_to_first_response_days",
+  );
+  const responseMarker = responseTrend
+    ? labels.indexOf(responseTrend.change_week)
+    : undefined;
+  const prLatency = series.pr_merge_latency_days || [];
+  const showPr = has("pr_merge_latency_days") && prLatency.some((v) => v > 0);
+  const kpis = [
+    { label: "Response time (latest)", value: `${last("time_to_first_response_days")} days` },
+    { label: "Open backlog", value: `${Math.round(last("backlog_size"))}` },
+    { label: "Opened / closed last week", value: `${Math.round(last("incoming_volume"))} / ${Math.round(last("issues_closed"))}` },
+    { label: "Duplicate rate", value: `${last("duplicate_rate")}%` },
+    { label: "Contributors (new last week)", value: `${Math.round(last("active_contributors"))} (${Math.round(last("new_contributors"))})` },
+    { label: "PR merge latency", value: showPr ? `${last("pr_merge_latency_days")} days` : "—" },
+  ];
   return (
     <div className="health-trend-detail">
-      {charts.length > 0 && (
-        <div className="health-chart-grid">
-          {charts.map((c) => (
-            <TrendChart
-              key={c.key}
-              title={c.title}
-              labels={labels}
-              values={series[c.key]}
-              color={c.color}
-              format={c.format}
-            />
+      <div className="health-overview">
+        <HealthScoreGauge score={result.health_score} status={result.health_status} />
+        <div className="health-kpis">
+          {kpis.map((kpi) => (
+            <div className="health-kpi" key={kpi.label}>
+              <strong>{kpi.value}</strong>
+              <span>{kpi.label}</span>
+            </div>
           ))}
         </div>
+      </div>
+      {(result.causes?.length > 0 || result.trends?.length > 0) && (
+        <div className="health-callout">
+          <div className="health-callout-heading">Root-cause analysis</div>
+          {result.causes?.length > 0 && (
+            <div className="health-callout-causes">
+              {result.causes.map((cause, i) => (
+                <div className="health-callout-cause" key={i}>
+                  <div>
+                    <strong>{cause.cause}</strong>
+                    <span className={`confidence ${cause.confidence || "low"}`}>
+                      {cause.confidence || "low"}
+                    </span>
+                  </div>
+                  {cause.evidence?.map((item) => (
+                    <Markdown text={item} key={String(item)} />
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+          {result.trends?.length > 0 && (
+            <div className="health-trend-list">
+              {result.trends.map((trend) => (
+                <span className="health-trend-chip" key={trend.metric}>
+                  {trend.display}: {trend.baseline_value} → {trend.recent_value}
+                  {trend.change_week ? ` (inflection ${trend.change_week})` : ""}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       )}
+      <div className="health-chart-grid">
+        {has("time_to_first_response_days") && (
+          <TrendChart
+            title="Median time-to-first-response"
+            labels={labels}
+            values={series.time_to_first_response_days}
+            color="#e5484d"
+            format={(v) => `${v} days`}
+            markerIndex={responseMarker}
+          />
+        )}
+        {has("backlog_size") && (
+          <BacklogFlowChart
+            labels={labels}
+            opened={series.incoming_volume}
+            closed={series.issues_closed}
+            backlog={series.backlog_size}
+            color="#8e4ec6"
+          />
+        )}
+        {has("duplicate_rate") && (
+          <TrendChart
+            title="Duplicate rate"
+            labels={labels}
+            values={series.duplicate_rate}
+            color="#e5a13c"
+            format={(v) => `${v}%`}
+          />
+        )}
+        {showPr && (
+          <TrendChart
+            title="PR merge latency"
+            labels={labels}
+            values={series.pr_merge_latency_days}
+            color="#0ea5e9"
+            format={(v) => `${v} days`}
+          />
+        )}
+        {has("active_contributors") && (
+          <TrendChart
+            title="Active contributors / week"
+            labels={labels}
+            values={series.active_contributors}
+            color="#3b82f6"
+            format={(v) => `${v}`}
+          />
+        )}
+        {has("incoming_volume") && (
+          <TrendChart
+            title="Incoming issues / week"
+            labels={labels}
+            values={series.incoming_volume}
+            color="#2f9e6e"
+            format={(v) => `${v}`}
+          />
+        )}
+      </div>
       {contributors.length > 0 && (
         <div className="result-list">
           <strong>Contributor activity</strong>

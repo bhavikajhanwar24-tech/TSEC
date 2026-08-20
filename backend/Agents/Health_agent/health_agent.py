@@ -128,8 +128,9 @@ def fetch_issue_series(owner: str, repo: str, weeks: int, max_issues: int = 500)
     # first-response time needs comment timestamps — fetch only for issues
     # inside the analysis window to bound API calls
     window_start = datetime.now(timezone.utc) - timedelta(weeks=weeks)
-    commenters: Dict[str, Dict[str, Any]] = {}   # user -> {count, last_active}
+    commenters: Dict[str, Dict[str, Any]] = {}   # user -> {count, last_active, first_active}
     commenters_by_week: Dict[str, set] = defaultdict(set)  # week -> active users
+    new_by_week: Counter = Counter()             # week -> users whose first comment was that week
     first_response: List[tuple] = []             # (week_key, hours)
     backlog_by_week: Counter = Counter()
     opened_by_week: Counter = Counter()
@@ -165,10 +166,16 @@ def fetch_issue_series(owner: str, repo: str, weeks: int, max_issues: int = 500)
                 user = (comment.get("user") or {}).get("login")
                 if not user or not cdt:
                     continue
-                info = commenters.get(user, {"count": 0, "last_active": datetime.min.replace(tzinfo=timezone.utc)})
+                info = commenters.get(user)
+                if info is None:
+                    info = {"count": 0, "last_active": datetime.min.replace(tzinfo=timezone.utc), "first_active": datetime.max.replace(tzinfo=timezone.utc)}
+                    commenters[user] = info
+                    new_by_week[_week_key(cdt)] += 1
                 info["count"] += 1
                 if cdt > info["last_active"]:
                     info["last_active"] = cdt
+                if cdt < info["first_active"]:
+                    info["first_active"] = cdt
                 commenters[user] = info
                 commenters_by_week[_week_key(cdt)].add(user)
                 # First response = first comment by a human who is not the issue
@@ -190,10 +197,32 @@ def fetch_issue_series(owner: str, repo: str, weeks: int, max_issues: int = 500)
         "backlog_by_week": backlog_by_week,
         "dup_by_week": dup_by_week,
         "closed_by_week": closed_by_week,
+        "new_by_week": new_by_week,
         "first_response": first_response,
         "commenters": commenters,
         "commenters_by_week": dict(commenters_by_week),
     }
+
+
+def fetch_pull_merge_latency(owner: str, repo: str, weeks: int) -> Dict[str, List[float]]:
+    """Weekly PR merge latencies (days, created -> merged). One extra GitHub
+    call; returns {} on any failure so the agent keeps running."""
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(weeks=weeks + 8)).isoformat()
+        raw = _gh_get(
+            f"{_API}/repos/{owner}/{repo}/pulls",
+            params={"state": "closed", "per_page": 100, "sort": "updated", "direction": "desc", "since": since},
+        )
+    except requests.HTTPError:
+        return {}
+    by_week: Dict[str, List[float]] = defaultdict(list)
+    for pr in raw:
+        created = _parse_iso(pr.get("created_at"))
+        merged = _parse_iso(pr.get("merged_at"))
+        if not created or not merged or merged < created:
+            continue
+        by_week[_week_key(merged)].append((merged - created).total_seconds() / 86400.0)
+    return dict(by_week)
 
 
 def fetch_commits_participation(owner: str, repo: str) -> List[int]:
@@ -246,6 +275,7 @@ def build_weekly_series(raw: Dict[str, Any], weeks: int) -> Dict[str, List[float
     backlog = bucket(raw["backlog_by_week"])
     dup_closed = bucket(raw["dup_by_week"])
     closed = bucket(raw["closed_by_week"])
+    new_contrib = bucket(raw.get("new_by_week", Counter()))
 
     # median time-to-first-response per week from (week, hours) pairs
     response = [0.0] * weeks
@@ -263,12 +293,22 @@ def build_weekly_series(raw: Dict[str, Any], weeks: int) -> Dict[str, List[float
 
     dup_rate = [round(d / c * 100, 1) if c > 0 else 0.0 for d, c in zip(dup_closed, closed)]
 
+    # PR merge latency per week (median days), 0 when no merges that week
+    pr_latency = [0.0] * weeks
+    pr_by_week = raw.get("pr_merge_by_week", {})
+    for i, label in enumerate(labels):
+        values = pr_by_week.get(label, [])
+        pr_latency[i] = round(statistics.median(values), 1) if values else 0.0
+
     return {
         "time_to_first_response_days": [round(h / 24.0, 2) for h in response],
         "backlog_size": backlog,
         "duplicate_rate": dup_rate,
         "incoming_volume": opened,
+        "issues_closed": closed,
         "active_contributors": contrib,
+        "new_contributors": new_contrib,
+        "pr_merge_latency_days": pr_latency,
     }, labels
 
 
@@ -287,11 +327,12 @@ def detect_trends(series: Dict[str, List[float]], labels: List[str]) -> List[Dic
         "duplicate_rate": {"higher_is_worse": True, "threshold": 1.5, "display": "duplicate rate"},
         "incoming_volume": {"higher_is_worse": True, "threshold": 1.5, "display": "incoming issue volume"},
         "active_contributors": {"higher_is_worse": False, "threshold": 0.67, "display": "active contributors"},
+        "pr_merge_latency_days": {"higher_is_worse": True, "threshold": 1.5, "display": "PR merge latency"},
     }
     trends = []
     for metric, values in series.items():
-        cfg = config[metric]
-        if len(values) < 5:
+        cfg = config.get(metric)
+        if cfg is None or len(values) < 5:
             continue
         baseline = values[-6:-2] or values[:-2]
         recent = values[-2:]
@@ -421,6 +462,7 @@ def retrieve(embedder: Any, chunks: List[str], query: str, k: int = 5) -> List[D
 
 def node_fetch_metrics(state: AgentState) -> AgentState:
     raw = fetch_issue_series(state["owner"], state["repo"], state["weeks"])
+    raw["pr_merge_by_week"] = fetch_pull_merge_latency(state["owner"], state["repo"], state["weeks"])
     releases = fetch_releases(state["owner"], state["repo"])
     try:
         participation = fetch_commits_participation(state["owner"], state["repo"])
@@ -432,9 +474,31 @@ def node_fetch_metrics(state: AgentState) -> AgentState:
     return {**state, "raw": raw, "releases": releases, "series": series, "week_labels": labels}
 
 
+def compute_health_score(trends: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Single glanceable score (0-100) + traffic-light status derived from the
+    detected trend ratios. Healthy >= 80, Watch >= 60, else Declining."""
+    score = 100.0
+    for t in trends:
+        metric, ratio = t["metric"], t["change_ratio"]
+        if metric == "time_to_first_response_days":
+            score -= 30 if ratio >= 3 else 15
+        elif metric == "backlog_size":
+            score -= 15 if ratio >= 1.5 else 8
+        elif metric == "duplicate_rate":
+            score -= 10
+        elif metric == "incoming_volume":
+            score -= 5
+        elif metric == "active_contributors":
+            score -= 15 if ratio <= 0.67 else 8
+    score = max(0, min(100, round(score)))
+    status = "Healthy" if score >= 80 else "Watch" if score >= 60 else "Declining"
+    return {"health_score": score, "health_status": status}
+
+
 def node_trend_detection(state: AgentState) -> AgentState:
     trends = detect_trends(state["series"], state["week_labels"])
-    return {**state, "trends": trends}
+    score = compute_health_score(trends)
+    return {**state, "trends": trends, **score}
 
 
 def node_drill_down(state: AgentState) -> AgentState:
@@ -546,6 +610,8 @@ def _heuristic_synthesize(state: AgentState) -> Dict[str, Any]:
     if not trends:
         return {
             "health_summary": "All tracked metrics are within baseline. No intervention needed this week.",
+            "health_score": state.get("health_score", 100),
+            "health_status": state.get("health_status", "Healthy"),
             "trends": [],
             "causes": [],
             "recommendation": "No action required; include a one-line 'healthy' status in the Weekly Brief.",
@@ -617,6 +683,8 @@ def _heuristic_synthesize(state: AgentState) -> Dict[str, Any]:
 
     return {
         "health_summary": f"{_metric_phrase(worst)}, {driver}.",
+        "health_score": state.get("health_score", 100),
+        "health_status": state.get("health_status", "Healthy"),
         "trends": trends,
         "causes": causes,
         "recommendation": recommendation,
@@ -659,6 +727,8 @@ def node_synthesize(state: AgentState) -> AgentState:
         parsed["series"] = state["series"]
         parsed["week_labels"] = state["week_labels"]
         parsed["contributor_activity"] = baseline["contributor_activity"]
+        parsed["health_score"] = baseline["health_score"]
+        parsed["health_status"] = baseline["health_status"]
         return {**state, "status": "complete", "result": {"status": "complete", **parsed}}
     except Exception as exc:
         fallback = _heuristic_synthesize(state)
