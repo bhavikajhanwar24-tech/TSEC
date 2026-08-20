@@ -52,16 +52,134 @@ FIELD_LABELS = {
     "context": "more context about what you are trying to do",
 }
 
-# Human-readable section headers that count as evidence a field is present.
-FIELD_MARKERS = {
-    "os": r"(?m)^\s*(?:#+\s*)?(?:os|operating system|platform)(?:\s*[:\-]|\s*$)",
-    "version": r"(?m)^\s*(?:#+\s*)?(?:version|release)(?:\s*[:\-]|\s*$)",
-    "reproduction_steps": r"(?m)^\s*(?:#+\s*)?(?:repro(duction)? steps?|steps to reproduce|steps)(?:\s*[:\-]|\s*$)",
-    "expected_actual": r"(?m)^\s*(?:#+\s*)?(?:expected|actual|what happened|what should happen)(?:\s*[:\-]|\s*$)",
-    "use_case": r"(?m)^\s*(?:#+\s*)?(?:use case|use-case|motivation|problem|why)(?:\s*[:\-]|\s*$)",
-    "expected_behavior": r"(?m)^\s*(?:#+\s*)?(?:expected behavior|expected behaviour|desired behavior|acceptance criteria)(?:\s*[:\-]|\s*$)",
-    "context": r"(?m)^\s*(?:#+\s*)?(?:context|background|details|environment)(?:\s*[:\-]|\s*$)",
+# Headings that count as evidence a field is covered. Headings are normalized
+# (lowercased, markdown stripped) and matched by word, so standard GitHub
+# templates ("### To Reproduce", "**OS:** Windows 10", "### Desktop (please
+# complete...)") are recognized even when they do not follow a strict schema.
+SECTION_SYNONYMS = {
+    "os": ["operating system", "os", "platform", "environment", "desktop", "system information", "system info", "device", "machine"],
+    "version": ["version", "release", "software version", "package version", "app version"],
+    "reproduction_steps": ["to reproduce", "reproduce", "reproduction steps", "steps to reproduce", "how to reproduce", "reproduction", "steps"],
+    "expected_actual": ["what happened", "what should happen", "expected behavior", "expected behaviour", "actual behavior", "actual behaviour", "expected vs actual", "expected and actual", "expected outcome", "expected result", "actual result", "actual"],
+    "use_case": ["use case", "use-case", "motivation", "problem", "why"],
+    "expected_behavior": ["expected behavior", "expected behaviour", "desired behavior", "desired behaviour", "acceptance criteria"],
+    "context": ["context", "additional context", "extra context", "details", "notes", "anything else"],
+    "logs": ["logs", "log", "console output", "error logs", "terminal output"],
+    "error_message": ["error message", "error", "exception", "stack trace", "traceback"],
 }
+
+# Template placeholder text that means "not filled in yet": GitHub's
+# "[e.g. iOS]" hints, HTML comments, "(please complete ...)" instructions,
+# empty checkboxes and "No response".
+PLACEHOLDER_PATTERNS = [
+    r"<!--.*?-->",
+    r"\[e\.g\.[^\]]*\]",
+    r"\[[^\]]*\.\.\.[^\]]*\]",
+    r"\((?i:please\s+)?(?i:complete|fill)[^)]*\)",
+    r"\[\s*\]",
+    r"(?i)\bno response\b",
+]
+
+# Full-line template instructions that must not count as issue content.
+INSTRUCTION_PATTERNS = [
+    r"(?i)^\s*a clear and concise description of\s*.*\.?\s*$",
+    r"(?i)^\s*steps to reproduce the behavior\s*:?\s*$",
+    r"(?i)^\s*what did you expect to happen\?\s*$",
+    r"(?i)^\s*what actually happened\?\s*$",
+    r"(?i)^\s*add any other context about the problem here\.?\s*$",
+    r"(?i)^\s*(?:please\s+)?(?:complete|fill(?: out)?)\s+(?:the\s+)?(?:following|this)\s+(?:information|section|template)\s*:?\s*$",
+    r"(?i)^\s*(?:describe|screenshots?|additional\s+context)\s*$",
+]
+
+# Real environment tokens that prove the OS field was answered.
+OS_TOKENS = ["windows 11", "windows 10", "windows", "macos", "os x", "linux", "ubuntu", "debian", "fedora", "arch", "android", "ios", "chrome os", "chrome", "firefox", "safari"]
+
+# Words that carry no information when judging whether a section is filled.
+FILLER_WORDS = frozenset("""the a an and or of to in for on with at by from it its is are was were be been being have has had do does did will would can could should may might this that these those there here what when where which who whom how why i you we they he she me my your our their us them please add any other context about problem issue bug feature expected actual behavior behaviour happen happened happening steps step reproduce reproduction reproducing repro description describe below above following information complete fill example e.g eg info none n/a na no yes not nothing work working works want like need thanks thank""".split())
+
+
+def _normalize_heading(line: str) -> str:
+    text = re.sub(r"[#*`_>~]+", " ", line)
+    text = re.sub(r"\s+", " ", text).strip().rstrip(":").strip()
+    return text.lower()
+
+
+def _heading_of(line: str) -> Optional[str]:
+    """Return a normalized heading for markdown headings, bold headings and
+    bare labels ("OS:"), or None for content lines."""
+    stripped = re.sub(r"^[-*]\s+", "", line.strip())
+    m = re.match(r"^#{1,6}\s+(.+?)\s*$", stripped)
+    if m:
+        return _normalize_heading(m.group(1))
+    m = re.match(r"^\*\*(.+?)\*\*\s*:?\s*$", stripped)
+    if m:
+        return _normalize_heading(m.group(1))
+    m = re.match(r"^__(.+?)__\s*:?\s*$", stripped)
+    if m:
+        return _normalize_heading(m.group(1))
+    m = re.match(r"^([A-Za-z][A-Za-z0-9 _/&()'-]{0,60}):\s*$", stripped)
+    if m:
+        return _normalize_heading(m.group(1))
+    return None
+
+
+def _heading_matches(normalized: str, synonyms) -> bool:
+    cleaned = re.sub(r"\s*\([^)]*\)\s*$", "", normalized).strip()
+    return any(re.search(rf"\b{re.escape(syn)}\b", cleaned) for syn in synonyms)
+
+
+def _scan_sections(body: str) -> Dict[str, List[str]]:
+    """Split the body into (heading, content) sections and map every heading to
+    each field it provides evidence for. Supports "### Heading", "**Heading**"
+    and inline "**Label:** content" lines."""
+    sections: List[tuple] = []
+    current_heading, current_lines = None, []
+    for line in (body or "").splitlines():
+        inline = re.match(r"^\*\*(.+?)\*\*:?\s+(.+)$", line.strip())
+        if inline:
+            if current_heading is not None or current_lines:
+                sections.append((current_heading, current_lines))
+            current_heading, current_lines = _normalize_heading(inline.group(1)), [inline.group(2)]
+            continue
+        heading = _heading_of(line)
+        if heading is not None:
+            if current_heading is not None or current_lines:
+                sections.append((current_heading, current_lines))
+            current_heading, current_lines = heading, []
+        else:
+            current_lines.append(line)
+    if current_heading is not None or current_lines:
+        sections.append((current_heading, current_lines))
+    covered: Dict[str, List[str]] = {}
+    for heading, lines in sections:
+        if not heading:
+            continue
+        for field, synonyms in SECTION_SYNONYMS.items():
+            if _heading_matches(heading, synonyms):
+                covered.setdefault(field, []).append("\n".join(lines))
+    return covered
+
+
+def _clean_content(text: str) -> str:
+    cleaned = text or ""
+    for pattern in PLACEHOLDER_PATTERNS:
+        cleaned = re.sub(pattern, " ", cleaned, flags=re.S)
+    return cleaned
+
+
+def _meaningful_words(text: str) -> List[str]:
+    cleaned = _clean_content(text)
+    for pattern in INSTRUCTION_PATTERNS:
+        cleaned = re.sub(pattern, " ", cleaned, flags=re.M)
+    return [
+        word for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9._/#+@-]*", cleaned)
+        if word.lower() not in FILLER_WORDS and not word.isdigit()
+    ]
+
+
+def _has_os_token(text: str) -> bool:
+    low = (text or "").lower()
+    return any(token in low for token in OS_TOKENS)
 
 # Patterns looked for in the repo's issue template / CONTRIBUTING.md.
 GUIDANCE_PATTERNS = {
@@ -365,51 +483,62 @@ def _analyze_with_llm(state: AgentState, defaults: List[str]) -> Optional[Dict[s
 def find_required_fields(state: AgentState) -> AgentState:
     issue_type = state.get("issue_type", "other")
     defaults = list(REQUIRED_BY_TYPE.get(issue_type, ["context"]))
-    body = (state["issue"].get("body") or "").lower()
+    body = state["issue"].get("body") or ""
+
+    # Deterministic template scan first: standard GitHub template sections and
+    # natural-language reports, with placeholder text ignored.
+    required = defaults
+    guidance = (state.get("guidance") or "").lower()
+    patterns = GUIDANCE_PATTERNS.get(issue_type, {})
+    if patterns and guidance:
+        requested = [field for field in required if re.search(patterns[field], guidance)]
+        if requested:
+            required = requested
+    detected = [field for field in required if _field_is_present(field, body)]
 
     analysis = _analyze_with_llm(state, defaults)
-    if analysis is None:
-        # Deterministic fallback: template-aware defaults + section-header scan.
-        required = defaults
-        guidance = (state.get("guidance") or "").lower()
-        patterns = GUIDANCE_PATTERNS.get(issue_type, {})
-        if patterns and guidance:
-            requested = [field for field in required if re.search(patterns[field], guidance)]
-            if requested:
-                required = requested
-        present = [field for field in required if _field_is_present(field, body)]
-        missing_details = [
-            _detail_for(field) for field in required if field not in present
-        ]
+    if analysis is not None:
+        allowed = set(ALLOWED_FIELD_KEYS)
+        required = list(dict.fromkeys(defaults + [f for f in analysis["required_fields"] if f in allowed]))
+        present = list(dict.fromkeys(
+            [f for f in analysis["present_fields"] if f in allowed and f in required]
+            + [f for f in detected if f in required]
+        ))
+        llm_details = analysis["missing_details"]
     else:
-        required = analysis["required_fields"]
-        present = analysis["present_fields"]
-        missing_details = analysis["missing_details"]
+        present = detected
+        llm_details = []
 
+    missing_fields = [field for field in required if field not in present]
+    missing_details = llm_details or [_detail_for(field) for field in missing_fields]
     return {
         "required_fields": required,
         "present_fields": present,
-        "missing_fields": [field for field in required if field not in present],
+        "missing_fields": missing_fields,
         "missing_details": missing_details,
     }
 
 
 def _field_is_present(field: str, body: str) -> bool:
-    """Recognize common natural-language answers when the LLM is unavailable."""
-    if re.search(FIELD_MARKERS[field], body):
-        return True
-    patterns = {
-        "os": r"\b(?:windows\s*\d*|mac(?:os)?|linux|ubuntu|debian|android|ios|iphone|ipad)\b",
-        "version": r"\b(?:v?\d+\.\d+(?:\.\d+)?|version\s*[:#]?\s*\S+)\b",
-        "reproduction_steps": r"\b(?:step\s*\d+|first,|then,|reproduce|reproduc|steps? to)\b",
-        "expected_actual": r"\b(?:expected|expect|actual|instead|but got|should have)\b",
-        "use_case": r"\b(?:use case|because|so that|would help|motivat)\b",
-        "expected_behavior": r"\b(?:should|would like|desired|acceptance|expected behavior)\b",
-        "context": r"\b(?:context|background|trying to|using this|environment)\b",
-        "logs": r"```[\s\S]+```|\b(?:log|stack trace|traceback|console output)\b",
-        "error_message": r"\b(?:error|exception|failure|failed)\b",
-    }
-    return bool(re.search(patterns.get(field, r"$^"), body, re.IGNORECASE))
+    """Template-aware check: does the issue text actually contain this field?
+
+    Recognizes standard GitHub issue templates ("### To Reproduce", "**OS:**",
+    "### Desktop (please complete the following information):") and plain
+    natural-language reports, while ignoring template placeholders such as
+    "[e.g. iOS]" and "No response".
+    """
+    body = body or ""
+    contents = _scan_sections(body).get(field, [])
+    if field == "os":
+        return _has_os_token(_clean_content(body)) or any(
+            _has_os_token(_clean_content(content)) for content in contents
+        )
+    if field == "version":
+        return bool(re.search(r"\bv?\d+\.\d+(?:\.\d+)*\b", _clean_content(body))) or any(
+            bool(re.search(r"\bv?\d+\.\d+(?:\.\d+)*\b", _clean_content(content)))
+            for content in contents
+        )
+    return any(len(_meaningful_words(content)) >= 1 for content in contents)
 
 
 def _detail_for(field: str) -> str:
@@ -439,7 +568,7 @@ def _draft_comment(issue_type: str, missing: List[str]) -> str:
     }
     points = [f"{index}. {questions[field]}" for index, field in enumerate(missing, 1) if field in questions]
     if not points:
-        return ""
+        points = [f"{index}. {field.replace('_', ' ')} not mentioned" for index, field in enumerate(missing, 1)]
     if issue_type == "bug":
         intro = "Thanks for the report. I can continue once you provide the following details:"
     elif issue_type == "feature":
