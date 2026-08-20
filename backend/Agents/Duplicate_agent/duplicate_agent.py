@@ -35,6 +35,7 @@ import os
 import re
 import sys
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Literal, Optional, TypedDict
 from urllib.error import HTTPError
 from urllib.parse import urlencode
@@ -235,11 +236,15 @@ _API = "https://api.github.com"
 _HEADERS = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
 
 
-def _gh_get(url: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+def _gh_get(url: str, params: Optional[Dict[str, Any]] = None, max_pages: int = 3) -> List[Dict[str, Any]]:
     """Paginate through a GitHub API endpoint. Raises on auth/rate errors so the
     agent fails loudly instead of silently searching an empty corpus."""
     items: List[Dict[str, Any]] = []
+    pages = 0
     while url:
+        pages += 1
+        if pages > max_pages:
+            break
         request_url = f"{url}?{urlencode(params)}" if params else url
         request = Request(request_url, headers=_HEADERS)
         try:
@@ -256,15 +261,19 @@ def _gh_get(url: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str,
     return items
 
 
-def fetch_corpus(owner: str, repo: str, limit: int = 200) -> List[Dict[str, Any]]:
+def fetch_corpus(owner: str, repo: str, limit: int = 50) -> List[Dict[str, Any]]:
     """Fetch only open issues and exclude pull requests from the corpus."""
     url = f"{_API}/repos/{owner}/{repo}/issues"
-    raw = _gh_get(url, params={"state": "open", "per_page": 100, "sort": "updated", "direction": "desc"})
+    raw = _gh_get(url, params={"state": "open", "per_page": 100, "sort": "updated", "direction": "desc"}, max_pages=2)
     issues = [i for i in raw if "pull_request" not in i and i.get("state") == "open"]
-    for issue in issues[:limit]:
-        comments = _gh_get(issue["comments_url"])
-        issue["comments"] = [{"body": c["body"], "user": c["user"]["login"]} for c in comments]
-    return issues[:limit]
+    issues = issues[:limit]
+    def fetch_comments(issue):
+        comments = _gh_get(issue["comments_url"], params={"per_page": 30}, max_pages=2)
+        return issue, [{"body": c.get("body") or "", "user": (c.get("user") or {}).get("login", "unknown")} for c in comments]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for issue, comments in pool.map(fetch_comments, issues):
+            issue["comments"] = comments
+    return issues
 
 
 def fetch_issue(owner: str, repo: str, number: int) -> Dict[str, Any]:
@@ -329,7 +338,7 @@ def build_llm() -> Optional[ChatNVIDIA]:
         api_key=NVIDIA_API_KEY,
         temperature=0.1,
         top_p=1,
-        max_completion_tokens=4096,
+        max_completion_tokens=1024,
     )
 
 
@@ -404,7 +413,7 @@ def node_embed_and_search(state: AgentState) -> AgentState:
 
 def node_fetch_threads(state: AgentState) -> AgentState:
     threads = []
-    for cand in state["candidates"][:5]:
+    for cand in state["candidates"][:3]:
         issue = cand["issue"]
         threads.append(
             {
