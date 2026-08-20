@@ -3,6 +3,7 @@ const express = require("express");
 const path = require("path");
 const { runAgentJob } = require("./agents");
 const { ensureIssue, saveWorkflow, saveAgentRun, saveIssueTimeline } = require("../services/workflowService");
+const { indexDocuments } = require("../services/ragService");
 
 const router = express.Router();
 const duplicateAgentDir = path.join(__dirname, "..", "Agents", "Duplicate_agent");
@@ -194,18 +195,53 @@ router.post(["/github", "/"], async (req, res) => {
   }
 
   const issueEvent = event === "issues" && ["opened", "reopened"].includes(req.body.action);
+  const pullRequestEvent = event === "pull_request" && ["opened", "reopened", "edited", "closed"].includes(req.body.action);
+  const commentEvent = event === "issue_comment" && req.body.action === "created";
+  const pushEvent = event === "push";
   const reporterReply = event === "issue_comment" && req.body.action === "created" && isHumanIssueComment(req.body);
-  if (!issueEvent && !reporterReply) {
+  if (!issueEvent && !pullRequestEvent && !commentEvent && !pushEvent) {
     return res.status(202).json({ accepted: true, processed: false });
   }
 
-  const issue = req.body.issue;
   const repository = req.body.repository;
-  if (!issue?.number || !repository?.owner?.login || !repository?.name) {
+  if (!repository?.owner?.login || !repository?.name) {
+    return res.status(400).json({ error: "Invalid repository webhook payload" });
+  }
+
+  if (pushEvent) {
+    indexDocuments(repository.owner.login, repository.name, (req.body.commits || []).map((commit) => ({
+      id: `commit-${commit.id}`,
+      text: `Commit ${commit.id}: ${commit.message || ""}\nAuthor: ${commit.author?.name || commit.author?.username || "unknown"}\nURL: ${commit.url || ""}`,
+      metadata: { kind: "commit", sha: commit.id, source: `Commit ${commit.id?.slice(0, 7) || "unknown"}` },
+    })));
+    return res.status(202).json({ accepted: true, processed: false, indexed: true, commits: (req.body.commits || []).length });
+  }
+
+  const issue = req.body.issue;
+  if (!issue?.number) {
     return res.status(400).json({ error: "Invalid issue webhook payload" });
   }
 
   await ensureIssue(issue, repository.owner.login, repository.name);
+
+  indexDocuments(repository.owner.login, repository.name, [{
+    id: `github-${issue.id || issue.number}`,
+    text: `${issue.pull_request ? "Pull request" : "Issue"} #${issue.number}: ${issue.title || ""}\n${issue.body || ""}\nState: ${issue.state || ""}`,
+    metadata: { kind: issue.pull_request ? "pr" : "issue", number: issue.number, state: issue.state || "", source: `${issue.pull_request ? "PR" : "Issue"} #${issue.number}` },
+  }]);
+
+  if (commentEvent) {
+    const comment = req.body.comment || {};
+    indexDocuments(repository.owner.login, repository.name, [{
+      id: `github-comment-${comment.id || req.get("x-github-delivery")}`,
+      text: `Comment on ${issue.pull_request ? "PR" : "Issue"} #${issue.number} by ${comment.user?.login || req.body.sender?.login || "unknown"}:\n${comment.body || ""}`,
+      metadata: { kind: "comment", number: issue.number, actor: comment.user?.login || req.body.sender?.login || "unknown", source: `${issue.pull_request ? "PR" : "Issue"} #${issue.number} comment` },
+    }]);
+  }
+
+  if (pullRequestEvent || (commentEvent && !reporterReply)) {
+    return res.status(202).json({ accepted: true, processed: false, indexed: true, issue: issue.number });
+  }
 
   if (reporterReply) {
     const issueRecord = await ensureIssue(issue, repository.owner.login, repository.name);

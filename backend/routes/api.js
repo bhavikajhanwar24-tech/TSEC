@@ -1,4 +1,5 @@
 const express = require("express");
+const { indexDocuments, searchDocuments } = require("../services/ragService");
 
 const router = express.Router();
 
@@ -50,6 +51,15 @@ function rankDocuments(documents, question) {
 function compact(value, limit = 1800) {
   const text = String(value || "").trim();
   return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function semanticDocuments(hits) {
+  return (hits || []).map((hit) => ({
+    id: hit.id,
+    source: hit.metadata?.source || `${hit.metadata?.kind || "Record"}${hit.metadata?.number ? ` #${hit.metadata.number}` : ""}`,
+    text: hit.text || "",
+    score: Number(hit.score || 0),
+  }));
 }
 
 async function answerWithNvidia(question, context) {
@@ -196,6 +206,7 @@ router.post("/repos/:owner/:repo/chat", async (req, res) => {
     const documents = [];
     if (repository) {
       documents.push({
+        id: "repository-overview",
         source: "Repository overview",
         text: `Repository ${repository.full_name}: ${repository.description || "No description"}\nLanguage: ${repository.language || "Not specified"}\nDefault branch: ${repository.default_branch}\nVisibility: ${repository.private ? "private" : "public"}\nStars: ${repository.stargazers_count || 0}\nForks: ${repository.forks_count || 0}\nOpen issues: ${repository.open_issues_count || 0}\nCreated: ${repository.created_at}\nUpdated: ${repository.updated_at}\nLicense: ${repository.license?.name || "Not specified"}`,
       });
@@ -204,38 +215,49 @@ router.post("/repos/:owner/:repo/chat", async (req, res) => {
       const issueJson = issue.toJSON();
       const kind = issueJson.isPullRequest ? "PR" : "Issue";
       documents.push({
+        id: `stored-${issueJson.githubIssueId || issueJson.number}`,
         source: `${kind} #${issueJson.number}`,
         text: `${kind} #${issueJson.number}: ${issueJson.title}\n${issueJson.body || ""}\nState: ${issueJson.state}\nWorkflow: ${issueJson.workflowStatus} at step ${issueJson.workflowStep}\n${(issueJson.agentRuns || []).map((run) => `${run.agentName} (${run.status}): ${run.reasoning}\n${JSON.stringify(run.output || {})}`).join("\n")}\n${(issueJson.timelines || []).map((timeline) => `${timeline.actor}: ${timeline.body}`).join("\n")}`,
       });
     });
     githubIssues.forEach((item) => {
       documents.push({
+        id: `github-${item.id || item.number}`,
         source: `${item.pull_request ? "PR" : "Issue"} #${item.number}`,
         text: `${item.pull_request ? "PR" : "Issue"} #${item.number}: ${item.title}\n${item.body || ""}\nState: ${item.state}\nAuthor: ${item.user?.login || "unknown"}\nCreated: ${item.created_at || ""}\nUpdated: ${item.updated_at || ""}`,
       });
     });
     githubCommits.forEach((commit) => {
       documents.push({
+        id: `commit-${commit.sha}`,
         source: `Commit ${commit.sha?.slice(0, 7) || "unknown"}`,
         text: `Commit ${commit.sha || ""}: ${commit.commit?.message || ""}\nAuthor: ${commit.author?.login || commit.commit?.author?.name || "unknown"}\nDate: ${commit.commit?.author?.date || ""}\nURL: ${commit.html_url || ""}`,
       });
     });
     githubContributors.forEach((contributor) => {
       documents.push({
+        id: `contributor-${contributor.id || contributor.login}`,
         source: `Contributor ${contributor.login || "unknown"}`,
         text: `Contributor: ${contributor.login || "unknown"}\nContributions: ${contributor.contributions || 0}\nProfile: ${contributor.html_url || ""}`,
       });
     });
 
-    const ranked = rankDocuments(documents, question);
-    const context = ranked.length
-      ? ranked.slice(0, 8).map((document) => `SOURCE: ${document.source}\n${compact(document.text, 700)}`).join("\n\n")
+    const indexable = documents.map(({ id, source, text }) => ({ id, text, metadata: { kind: "repository", source } }));
+    let semantic = semanticDocuments((await searchDocuments(owner, repo, question, 8)).hits);
+    if (!semantic.length && indexable.length) {
+      await indexDocuments(owner, repo, indexable);
+      semantic = semanticDocuments((await searchDocuments(owner, repo, question, 8)).hits);
+    }
+    const keyword = rankDocuments(documents, question);
+    const combined = [...semantic, ...keyword].filter((document, index, all) => all.findIndex((item) => item.id === document.id) === index).slice(0, 12);
+    const context = combined.length
+      ? combined.slice(0, 8).map((document) => `SOURCE: ${document.source}\n${compact(document.text, 900)}`).join("\n\n")
       : "No stored issue, pull request, or workflow records were found for this repository.";
     const answer = await answerWithNvidia(question, context);
-    const fallback = ranked.length
-      ? `I found ${ranked.length} related repository record${ranked.length === 1 ? "" : "s"}: ${ranked.map((document) => document.source).join(", ")}. Review the matching records in the dashboard for the confirmed details.`
+    const fallback = combined.length
+      ? `I found ${combined.length} related repository record${combined.length === 1 ? "" : "s"}: ${combined.map((document) => document.source).join(", ")}. Review the matching records in the dashboard for the confirmed details.`
       : "I could not find matching issue, pull request, or workflow history for that question.";
-    const value = { answer: answer || fallback, sources: ranked.map(({ source, score }) => ({ source, score })) };
+    const value = { answer: answer || fallback, sources: combined.map(({ source, score }) => ({ source, score })) };
     chatCache.set(cacheKey, { value, expiresAt: Date.now() + 60_000 });
     if (chatCache.size > 200) chatCache.delete(chatCache.keys().next().value);
     res.json(value);

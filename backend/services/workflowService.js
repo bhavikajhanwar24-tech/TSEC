@@ -1,4 +1,5 @@
 const { Issue, AgentRun, IssueTimeline } = require("../models");
+const { indexDocuments } = require("./ragService");
 
 const fallbackIssues = new Map();
 const fallbackRuns = new Map();
@@ -72,6 +73,12 @@ async function saveAgentRun(issueRecord, state, agentName, result, status = "com
     console.error("Workflow database agent write failed:", error.message);
   }
   fallbackRuns.set(`${issueRecord.repoFullName || ""}#${issueRecord.number}:${agentName}`, values);
+  const [owner, repo] = String(issueRecord.repoFullName || "/").split("/");
+  indexDocuments(owner, repo, [{
+    id: `decision-${issueRecord.githubIssueId}-${agentName}`,
+    text: `Agent decision for ${issueRecord.repoFullName} issue #${issueRecord.number}\nAgent: ${agentName}\nStatus: ${status}\n${JSON.stringify(output)}`,
+    metadata: { kind: "decision", number: issueRecord.number, agent: agentName, status },
+  }]);
 }
 
 async function saveIssueTimeline(issueRecord, eventType, actor, body) {
@@ -81,6 +88,14 @@ async function saveIssueTimeline(issueRecord, eventType, actor, body) {
       where: { issueId: issueRecord.id, eventType },
       defaults: { actor: actor || "unknown", body: body || "" },
     });
+    if (created) {
+      const [owner, repo] = String(issueRecord.repoFullName || "/").split("/");
+      indexDocuments(owner, repo, [{
+        id: `timeline-${issueRecord.githubIssueId}-${eventType}`,
+        text: `Discussion for ${issueRecord.repoFullName} issue #${issueRecord.number}\n${actor || "unknown"}: ${body || ""}`,
+        metadata: { kind: "comment", number: issueRecord.number, actor: actor || "unknown", eventType },
+      }]);
+    }
     return created;
   } catch (error) {
     console.error("Workflow database timeline write failed:", error.message);
