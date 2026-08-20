@@ -25,6 +25,11 @@ function getAnalysis(owner, repo, number) {
   return analyses.get(analysisKey(owner, repo, number));
 }
 
+function isHumanIssueComment(payload) {
+  const sender = payload.sender || payload.comment?.user;
+  return Boolean(sender) && sender.type !== "Bot" && sender.type !== "Integration";
+}
+
 async function getPersistedAnalysis(owner, repo, number) {
   try {
     const { Issue } = require("../models");
@@ -174,8 +179,8 @@ router.post(["/github", "/"], async (req, res) => {
     return res.status(401).json({ error: "Invalid webhook signature" });
   }
 
-  const issueEvent = event === "issues" && ["opened", "edited", "reopened"].includes(req.body.action);
-  const reporterReply = event === "issue_comment" && req.body.action === "created";
+  const issueEvent = event === "issues" && ["opened", "reopened"].includes(req.body.action);
+  const reporterReply = event === "issue_comment" && req.body.action === "created" && isHumanIssueComment(req.body);
   if (!issueEvent && !reporterReply) {
     return res.status(202).json({ accepted: true, processed: false });
   }
@@ -196,7 +201,7 @@ router.post(["/github", "/"], async (req, res) => {
 
   const inMemoryAnalysis = getAnalysis(repository.owner.login, repository.name, issue.number);
   let existing = inMemoryAnalysis || await getPersistedAnalysis(repository.owner.login, repository.name, issue.number);
-  const isResume = reporterReply || req.body.action === "edited";
+  const isResume = reporterReply;
   if (inMemoryAnalysis?.status === "running") return res.status(202).json({ accepted: true, processed: false, resumed: true, issue: issue.number });
   if (existing?.status === "complete" || existing?.status === "stopped_duplicate") {
     return res.status(202).json({ accepted: true, processed: false, issue: issue.number });

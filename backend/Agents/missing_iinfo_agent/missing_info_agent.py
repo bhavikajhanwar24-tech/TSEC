@@ -167,6 +167,21 @@ def github_request(path: str, token: str) -> Any:
     return response.json()
 
 
+def fetch_human_comments(owner: str, repo: str, issue_number: int, token: str) -> List[Dict[str, Any]]:
+    """Return reporter comments while excluding RepoGuardian's own bot comments."""
+    try:
+        comments = github_request(
+            f"/repos/{owner}/{repo}/issues/{issue_number}/comments?per_page=100",
+            token,
+        )
+    except requests.HTTPError:
+        return []
+    return [
+        comment for comment in comments
+        if comment.get("user", {}).get("type") not in {"Bot", "Integration"}
+    ]
+
+
 def fetch_issue(state: AgentState) -> AgentState:
     token = os.environ["GITHUB_TOKEN"]
     issue = github_request(
@@ -175,6 +190,16 @@ def fetch_issue(state: AgentState) -> AgentState:
     )
     if "pull_request" in issue:
         return {"issue": issue, "action": "pass-through", "issue_type": "other"}
+
+    comments = fetch_human_comments(
+        state["owner"], state["repo"], state["issue_number"], token
+    )
+    if comments:
+        discussion = "\n\n".join(
+            f"Comment by {comment.get('user', {}).get('login', 'reporter')}:\n{comment.get('body') or ''}"
+            for comment in comments
+        )
+        issue = {**issue, "body": f"{issue.get('body') or ''}\n\nGitHub discussion:\n{discussion}"}
 
     guidance_parts = []
     for path in TEMPLATE_PATHS:
