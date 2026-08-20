@@ -218,7 +218,9 @@ async function runAllAgents(issue, repository, record, token = process.env.GITHU
   }
 
   const remaining = steps.slice(2).filter(([name]) => !record.agents[name] || record.agents[name].status !== "complete");
-  await Promise.all(remaining.map((stepDefinition) => runStep(stepDefinition)));
+  for (const stepDefinition of remaining) {
+    await runStep(stepDefinition);
+  }
   record.status = "complete";
   record.completedAt = new Date().toISOString();
   await saveWorkflow(record.issueRecord, { step: record.step, status: record.status, output: record });

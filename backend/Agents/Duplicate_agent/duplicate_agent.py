@@ -727,6 +727,11 @@ def main() -> int:
             print("error: --issue-json payload must contain an 'issue' object", file=sys.stderr)
             return 1
         issue = issue.get("issue", issue)
+        if issue.get("comments_url"):
+            issue["comments"] = [
+                {"body": comment.get("body") or "", "user": (comment.get("user") or {}).get("login", "unknown")}
+                for comment in _gh_get(issue["comments_url"], params={"per_page": 100}, max_pages=5)
+            ]
     elif args.issue_number:
         issue = github_issue_to_model(fetch_issue(args.owner, args.repo, args.issue_number))
     else:

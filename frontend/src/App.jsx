@@ -396,14 +396,14 @@ function RepositoryChatButton({ onClick, active }) {
 
 const automaticAgents = [
   [
-    "duplicate",
-    "Duplicate check",
-    "Compares this issue with open issue history.",
-  ],
-  [
     "missingInfo",
     "Missing information",
     "Checks whether the report is actionable.",
+  ],
+  [
+    "duplicate",
+    "Duplicate check",
+    "Compares the completed report with open issue history.",
   ],
   [
     "sensitivity",
@@ -425,7 +425,11 @@ function statusLabel(status) {
       ? "Complete"
       : status === "running"
         ? "Running"
-        : "Waiting";
+        : status === "waiting_duplicate_info"
+          ? "Waiting for duplicate evidence"
+          : status === "waiting_missing_info"
+            ? "Waiting for reporter"
+            : "Waiting";
 }
 
 function resultHighlights(result = {}) {
@@ -1539,6 +1543,8 @@ function CentralAnalysisDashboard({
       ? "Ready"
       : analysis?.status === "waiting_missing_info"
         ? "Waiting for reporter"
+        : analysis?.status === "waiting_duplicate_info"
+          ? "Waiting for duplicate evidence"
         : "Running";
   return (
     <div
@@ -1946,6 +1952,8 @@ function AgentAnalysisView({ owner, repo, issue, onClose }) {
                     ? "Ready"
                     : analysis?.status === "waiting_missing_info"
                       ? "Waiting for reporter"
+                      : analysis?.status === "waiting_duplicate_info"
+                        ? "Waiting for duplicate evidence"
                       : "Running"}
                 </strong>
                 <span>analysis status</span>
