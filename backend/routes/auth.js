@@ -55,6 +55,14 @@ router.get("/github", (req, res) => {
   res.redirect(`${GITHUB_AUTH_URL}?${params}`);
 });
 
+router.get("/github/install", (req, res) => {
+  const appSlug = process.env.GITHUB_APP_SLUG;
+  if (!appSlug) {
+    return res.status(500).send("GitHub App installation is not configured");
+  }
+  res.redirect(`https://github.com/apps/${encodeURIComponent(appSlug)}/installations/new`);
+});
+
 router.get("/github/callback", async (req, res) => {
   const { code, state } = req.query;
 

@@ -41,6 +41,8 @@ h1, h2 { font-family: 'Space Grotesk', sans-serif; }
 .outline-button, .primary-button { border-radius: 8px; font-size: 13px; font-weight: 600; padding: 11px 15px; text-decoration: none; }
 .outline-button { background: #fff; border: 1px solid var(--line); color: var(--ink); }
 .primary-button { background: var(--ink); color: #fff; display: inline-flex; gap: 18px; }
+.auth-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.secondary-button { border: 1px solid var(--line); border-radius: 8px; color: var(--ink); display: inline-flex; font-size: 13px; font-weight: 600; gap: 18px; padding: 11px 15px; text-decoration: none; }
 .stats { background: #fff; border: 1px solid var(--line); border-radius: 11px; justify-content: flex-start; margin-bottom: 34px; }
 .stat { border-right: 1px solid var(--line); min-width: 150px; padding: 17px 23px; }
 .stat:last-child { border: 0; }
