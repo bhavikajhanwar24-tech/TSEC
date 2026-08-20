@@ -32,6 +32,26 @@ async function fetchOptionalList(url, headers) {
   return Array.isArray(data) ? data : [];
 }
 
+async function fetchPaginatedList(url, headers, maxPages = 100) {
+  const items = [];
+  for (let page = 1; page <= maxPages; page += 1) {
+    const separator = url.includes("?") ? "&" : "?";
+    let response;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      response = await fetch(`${url}${separator}per_page=100&page=${page}`, { headers });
+      if (response.status !== 202) break;
+      await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
+    }
+    if (response.status === 202) return { items, pending: true };
+    if (!response.ok) return { items, pending: false };
+    const data = await response.json().catch(() => []);
+    if (!Array.isArray(data)) return { items, pending: false };
+    items.push(...data);
+    if (data.length < 100) break;
+  }
+  return { items, pending: false };
+}
+
 function tokens(value) {
   return new Set(String(value || "").toLowerCase().match(/[a-z0-9_#-]{3,}/g) || []);
 }
@@ -143,18 +163,19 @@ router.get("/repos/:owner/:repo/details", async (req, res) => {
   const baseUrl = `${GITHUB_API}/repos/${owner}/${repo}`;
 
   try {
-    const [repoResponse, issues, pulls, commits, contributors, codeFrequency] = await Promise.all([
+    const [repoResponse, issues, pulls, commits, contributorResult, codeFrequency] = await Promise.all([
       fetch(baseUrl, { headers }),
       fetchOptionalList(`${baseUrl}/issues?state=all&per_page=30`, headers),
       fetchOptionalList(`${baseUrl}/pulls?state=all&per_page=30`, headers),
       fetchOptionalList(`${baseUrl}/commits?per_page=30`, headers),
-      fetchOptionalList(`${baseUrl}/contributors?per_page=30`, headers),
+      fetchPaginatedList(`${baseUrl}/contributors?anon=1`, headers),
       fetchCodeFrequency(`${baseUrl}/stats/code_frequency`, headers),
     ]);
 
     if (!repoResponse.ok) return res.status(repoResponse.status).json({ error: "Repo not found" });
 
     const repoData = await repoResponse.json();
+    const contributors = contributorResult.items;
     const contributorFallback = commits.reduce((byLogin, commit) => {
       const login = commit.author?.login || commit.commit?.author?.name;
       if (!login) return byLogin;
@@ -184,6 +205,7 @@ router.get("/repos/:owner/:repo/details", async (req, res) => {
       contributors: normalizedContributors,
       codeFrequency: Array.isArray(codeFrequency.data) ? codeFrequency.data : [],
       codeFrequencyPending: codeFrequency.pending,
+      contributorsPending: contributorResult.pending,
     });
   } catch (err) {
     console.error("Failed to fetch repository details:", err);

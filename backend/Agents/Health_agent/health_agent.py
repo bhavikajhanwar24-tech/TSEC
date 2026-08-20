@@ -55,7 +55,7 @@ load_dotenv(os.path.join(BACKEND_DIR, ".env"))   # shared backend credentials
 load_dotenv(os.path.join(BASE_DIR, ".env"))      # optional local overrides
 
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
-NVIDIA_LLM_MODEL = os.getenv("NVIDIA_LLM_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
+NVIDIA_LLM_MODEL = os.getenv("NVIDIA_LLM_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
 NVIDIA_EMBED_MODEL = os.getenv("NVIDIA_EMBED_MODEL", "nvidia/nv-embedqa-e5-v5")
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
@@ -439,7 +439,7 @@ def build_llm() -> Optional[Any]:
         api_key=NVIDIA_API_KEY,
         temperature=0.1,
         top_p=1,
-        max_completion_tokens=4096,
+        max_completion_tokens=800,
     )
 
 
