@@ -2121,8 +2121,10 @@ function CentralAnalysisDashboard({
                       <summary>Agent reasons and evidence</summary>
                       {(escalation.agentRuns || []).map((run) => <div key={run.id}><b>{run.agentName}</b> · {run.status}<p>{run.reasoning}</p><pre>{JSON.stringify(run.output || {}, null, 2)}</pre></div>)}
                     </details>
-                    <ModeratorPanel context={moderator} onAction={onModeratorAction} />
                   </section>
+                )}
+                {moderator && (
+                  <ModeratorPanel context={moderator} onAction={onModeratorAction} />
                 )}
                 {error && <p className="detail-error">{error}</p>}
                 <section className="analysis-content-grid">
