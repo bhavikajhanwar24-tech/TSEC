@@ -44,6 +44,11 @@ from langchain_core.messages import HumanMessage
 from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIAEmbeddings
 from langgraph.graph import END, START, StateGraph
 
+COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common")
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+import memory_store  # noqa: E402  (shared persistent Chroma memory)
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BACKEND_DIR = os.path.dirname(os.path.dirname(BASE_DIR))
 load_dotenv(os.path.join(BACKEND_DIR, ".env"))   # shared backend credentials
@@ -421,6 +426,34 @@ def node_trend_detection(state: AgentState) -> AgentState:
 def node_drill_down(state: AgentState) -> AgentState:
     chunks = build_chunks(state["raw"], state["series"], state["week_labels"], state["releases"], state["weeks"])
     retrieved: List[Dict[str, Any]] = []
+    embedder = state["embedder"]
+
+    # Persist this run's evidence chunks into the shared project memory so
+    # later runs can see trends across windows (e.g. a maintainer who went
+    # quiet two weeks ago). Never blocks the pipeline on failure.
+    chunk_vecs = embedder.embed_documents(chunks)
+    memory_store.ingest(
+        state["owner"],
+        state["repo"],
+        [
+            {
+                "id": f"health-{i}",
+                "text": chunk,
+                "embedding": vec,
+                "metadata": {
+                    "kind": "health_chunk",
+                    "chunk_type": "contributor" if chunk.startswith("contributor @")
+                    else "release" if chunk.startswith("release")
+                    else "week",
+                },
+            }
+            for i, (chunk, vec) in enumerate(zip(chunks, chunk_vecs))
+        ],
+    )
+
+    def _merge(hits: List[Dict[str, Any]], query_label: str) -> None:
+        for hit in hits:
+            retrieved.append({"chunk": hit["text"], "score": hit["score"], "query": query_label, "memory": True})
 
     # query 1: explain the detected trend against the full evidence corpus
     if state["trends"]:
@@ -429,18 +462,20 @@ def node_drill_down(state: AgentState) -> AgentState:
             f"what changed in the last {state['weeks']} weeks around week {worst['change_week']} "
             f"that could explain the {worst['display']} trend: {worst['baseline_value']} -> {worst['recent_value']}"
         )
-        for hit in retrieve(state["embedder"], chunks, trend_query, k=5):
+        for hit in retrieve(embedder, chunks, trend_query, k=5):
             hit["query"] = "trend"
             retrieved.append(hit)
+        _merge(memory_store.retrieve(state["owner"], state["repo"], embedder.embed_query(trend_query), k=4, where={"kind": "health_chunk"}), "trend")
 
     # query 2: causal side-query against contributor + release evidence only, so
     # capacity signals (a maintainer going quiet) are never out-ranked and cut
     causal_chunks = [c for c in chunks if c.startswith("contributor @") or c.startswith("release")]
     if causal_chunks:
         causal_query = f"which contributors were active or went quiet in the last {state['weeks']} weeks"
-        for hit in retrieve(state["embedder"], causal_chunks, causal_query, k=2):
+        for hit in retrieve(embedder, causal_chunks, causal_query, k=2):
             hit["query"] = "causal"
             retrieved.append(hit)
+        _merge(memory_store.retrieve(state["owner"], state["repo"], embedder.embed_query(causal_query), k=2, where={"kind": "health_chunk"}), "causal")
 
     # merge, dedupe, keep the best score per chunk, cap at 6
     best: Dict[str, Dict[str, Any]] = {}

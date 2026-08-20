@@ -34,16 +34,21 @@ import math
 import os
 import re
 import sys
+from collections import Counter
+from typing import Any, Dict, List, Optional, TypedDict
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from collections import Counter
-from typing import Any, Dict, List, Optional, TypedDict
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIAEmbeddings
 from langgraph.graph import END, START, StateGraph
+
+COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common")
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+import memory_store  # noqa: E402  (shared persistent Chroma memory)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BACKEND_DIR = os.path.dirname(os.path.dirname(BASE_DIR))
@@ -320,7 +325,37 @@ def node_embed_and_search(state: AgentState) -> AgentState:
     candidates = [
         c for c in store.search(query_vec, k=10) if c["issue"].get("number") != incoming_number
     ]
-    return {**state, "candidates": candidates}
+
+    # Merge with the persistent project memory: similar PAST issues (with their
+    # state/closure context) seen by earlier runs of this agent.
+    owner, repo = state["repository"].get("owner", ""), state["repository"].get("repo", "")
+    if owner and repo:
+        mem_hits = memory_store.retrieve(owner, repo, query_vec, k=8, where={"kind": "issue"})
+        seen = {c["issue"].get("number") for c in candidates}
+        for hit in mem_hits:
+            meta = hit["metadata"]
+            number = meta.get("number")
+            if not number or number in seen:
+                continue
+            seen.add(number)
+            candidates.append(
+                {
+                    "issue": {
+                        "number": number,
+                        "url": meta.get("url", ""),
+                        "title": meta.get("title", ""),
+                        "body": "",
+                        "state": meta.get("state", ""),
+                        "closure_reason": meta.get("closure_reason", ""),
+                        "fixed_in_version": meta.get("fixed_in_version", ""),
+                        "comments": [{"body": hit["text"]}],
+                        "memory": True,
+                    },
+                    "similarity_score": hit["score"],
+                }
+            )
+    candidates.sort(key=lambda c: c["similarity_score"], reverse=True)
+    return {**state, "candidates": candidates[:12]}
 
 
 def node_fetch_threads(state: AgentState) -> AgentState:
@@ -537,13 +572,13 @@ def node_finalize(state: AgentState) -> AgentState:
 # Graph
 # ---------------------------------------------------------------------------
 
-def build_graph(issue: Dict[str, Any], corpus: List[Dict[str, Any]], llm: Any, embedder: Any) -> Any:
+def build_graph(issue: Dict[str, Any], corpus: List[Dict[str, Any]], llm: Any, embedder: Any, owner: str = "", repo: str = "") -> Any:
     store = build_index(corpus, embedder)
 
     def _make_state() -> AgentState:
         return {
             "issue": issue,
-            "repository": {"owner": issue.get("repository", {}).get("owner", ""), "repo": issue.get("repository", {}).get("repo", "")},
+            "repository": {"owner": owner, "repo": repo},
             "searchable_text": "",
             "signals": {},
             "candidates": [],
@@ -590,7 +625,35 @@ def run_duplicate_check(issue: Dict[str, Any], owner: str = GITHUB_OWNER, repo: 
         raise RuntimeError(f"no issue history found for {owner}/{repo} — check GITHUB_TOKEN/Owner/Repo")
     llm = build_llm()
     embedder = build_embedder()
-    compiled, make_state = build_graph(issue, corpus, llm, embedder)
+
+    # Persist the fetched history into the shared project memory so future
+    # runs can retrieve these issues (with their resolution context) even if
+    # the GitHub fetch window changes. Never blocks the pipeline on failure.
+    memory_store.ingest(
+        owner,
+        repo,
+        [
+            {
+                "id": f"issue-{i['number']}",
+                "text": full_thread_text(i),
+                "embedding": vec,
+                "metadata": {
+                    "kind": "issue",
+                    "number": i["number"],
+                    "title": i.get("title", ""),
+                    "url": i.get("url", ""),
+                    "state": i.get("state", ""),
+                    "closure_reason": i.get("closure_reason", ""),
+                    "fixed_in_version": i.get("fixed_in_version", ""),
+                    "created_at": i.get("created_at", ""),
+                    "closed_at": i.get("closed_at", ""),
+                },
+            }
+            for i, vec in zip(corpus, embedder.embed_documents([full_thread_text(i) for i in corpus]))
+        ],
+    )
+
+    compiled, make_state = build_graph(issue, corpus, llm, embedder, owner=owner, repo=repo)
     return compiled.invoke(make_state())
 
 

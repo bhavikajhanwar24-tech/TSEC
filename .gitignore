@@ -1,5 +1,10 @@
 node_modules/
 __pycache__/
+*.pyc
+
+# Chroma vector memory store (per-run persistent cache, rebuilt from GitHub)
+Agents/common/.memory_store/
+.memory_store/
 
 .env
 **/.env

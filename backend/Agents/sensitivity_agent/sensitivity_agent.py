@@ -44,6 +44,11 @@ from langchain_core.messages import HumanMessage
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langgraph.graph import END, START, StateGraph
 
+COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common")
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+import memory_store  # noqa: E402  (shared persistent Chroma memory)
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BACKEND_DIR = os.path.dirname(os.path.dirname(BASE_DIR))
 load_dotenv(os.path.join(BACKEND_DIR, ".env"))   # shared backend credentials
@@ -139,6 +144,7 @@ class AgentState(TypedDict):
     status: str
     error: Optional[str]
     llm: Optional[Any]
+    embedder: Any
     owner: str
     repo: str
 
@@ -364,6 +370,22 @@ def node_classify(state: AgentState) -> AgentState:
         return {**state, "status": "complete", "result": {"status": "complete", **decision}}
 
     policy_text = state["policy"].get("text", "")[:1200] if state["policy"] else ""
+
+    # Similar past issues this agent already flagged as security-sensitive
+    # (from the shared project memory) — precedent for how to handle this one.
+    memory_context = ""
+    try:
+        query_vec = state["embedder"].embed_query(state["searchable_text"])
+        past = memory_store.retrieve(state["owner"], state["repo"], query_vec, k=3, where={"kind": "issue", "is_sensitive": True})
+        if past:
+            memory_context = "\n".join(
+                f"- issue #{h['metadata'].get('number', '?')}: danger {h['metadata'].get('danger_score')}, "
+                f"action {h['metadata'].get('suggested_action', '?')} — {h['text'][:220]}"
+                for h in past
+            )
+    except Exception:
+        memory_context = ""
+
     prompt = (
         "You are the Security Sensitivity Agent of a GitHub maintenance platform. "
         "A new issue may be publicly disclosing a security concern that should go "
@@ -373,6 +395,7 @@ def node_classify(state: AgentState) -> AgentState:
         f"Regex-classifier indicators:\n{json.dumps([i['label'] for i in state['indicators']], indent=2)}\n\n"
         f"Known advisories/dependabot alerts matched: {json.dumps(state['advisories'], indent=2)}\n\n"
         f"Repo SECURITY.md (first 1200 chars):\n{policy_text or '(no SECURITY.md found)'}\n\n"
+        f"Similar past issues you flagged as security-sensitive (from project memory):\n{memory_context or '(none yet)'}\n\n"
         "Respond with ONLY JSON:\n"
         '{"is_security_sensitive": bool, "danger_score": <0..100>, '
         '"priority_flag": "HIGH"|"MEDIUM"|"LOW", "private_notification_required": bool, '
@@ -392,6 +415,33 @@ def node_classify(state: AgentState) -> AgentState:
 
 
 def node_finalize(state: AgentState) -> AgentState:
+    # Remember this issue (and how it was classified) in the shared project
+    # memory so future runs can reference it as precedent. Never blocks.
+    result = state.get("result") or {}
+    try:
+        query_vec = state["embedder"].embed_query(state["searchable_text"])
+        memory_store.ingest(
+            state["owner"],
+            state["repo"],
+            [
+                {
+                    "id": f"issue-{state['issue'].get('number', '')}",
+                    "text": state["searchable_text"],
+                    "embedding": query_vec,
+                    "metadata": {
+                        "kind": "issue",
+                        "number": state["issue"].get("number", 0),
+                        "is_sensitive": bool(result.get("is_security_sensitive", False)),
+                        "danger_score": int(result.get("danger_score", 0)),
+                        "priority_flag": result.get("priority_flag", "LOW"),
+                        "suggested_action": result.get("suggested_action", ""),
+                        "created_at": state["issue"].get("created_at", ""),
+                    },
+                }
+            ],
+        )
+    except Exception:
+        pass
     return state
 
 
@@ -399,7 +449,7 @@ def node_finalize(state: AgentState) -> AgentState:
 # Graph
 # ---------------------------------------------------------------------------
 
-def build_graph(issue: Dict[str, Any], llm: Any, owner: str, repo: str) -> Any:
+def build_graph(issue: Dict[str, Any], llm: Any, owner: str, repo: str, embedder: Any = None) -> Any:
     def _make_state() -> AgentState:
         return {
             "issue": issue,
@@ -411,6 +461,7 @@ def build_graph(issue: Dict[str, Any], llm: Any, owner: str, repo: str) -> Any:
             "status": "complete",
             "error": None,
             "llm": llm,
+            "embedder": embedder or memory_store.build_embedder(),
             "owner": owner,
             "repo": repo,
         }

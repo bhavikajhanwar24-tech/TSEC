@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from typing import Any, Dict, List, TypedDict
 
 import requests
@@ -21,6 +22,11 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
+
+COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common")
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+import memory_store  # noqa: E402  (shared persistent Chroma memory)
 
 
 GITHUB_API = "https://api.github.com"
@@ -143,6 +149,27 @@ def find_required_fields(state: AgentState) -> AgentState:
         if re.search(r"\b(expected|actual|behavior|behaviour)\b", guidance):
             required.append("expected_actual")
         required = required or ["os", "version", "reproduction_steps", "expected_actual"]
+    else:
+        # No repo template: learn from the project memory — fields that similar
+        # past bug reports in this repo were missing.
+        try:
+            embedder = memory_store.build_embedder()
+            issue = state["issue"]
+            query_text = f"{issue.get('title', '')}\n{issue.get('body') or ''}"
+            hits = memory_store.retrieve(
+                state.get("owner", ""), state.get("repo", ""), embedder.embed_query(query_text), k=3,
+                where={"kind": "issue", "issue_type": "bug"},
+            )
+            remembered: List[str] = []
+            for hit in hits:
+                for field in (hit["metadata"].get("missing_fields") or "").split(","):
+                    field = field.strip()
+                    if field in FIELD_LABELS and field not in remembered:
+                        remembered.append(field)
+            if remembered:
+                required = remembered
+        except Exception:
+            pass
 
     body = (state["issue"].get("body") or "").lower()
     markers = {
@@ -162,7 +189,14 @@ def find_required_fields(state: AgentState) -> AgentState:
 def draft_follow_up(state: AgentState) -> AgentState:
     missing = state.get("missing_fields", [])
     if state.get("issue_type") != "bug" or not missing:
+        # Still remember the issue in the shared project memory so future runs
+        # can learn what this repo's reports look like. Never blocks.
+        _remember(state)
         return {"action": "pass-through", "draft_comment": ""}
+
+    # Remember this report and what it was missing (used as learning signal for
+    # future issues when the repo has no issue template). Never blocks.
+    _remember(state)
 
     requested = [FIELD_LABELS[field] for field in missing]
     if len(requested) == 1:
@@ -177,6 +211,38 @@ def draft_follow_up(state: AgentState) -> AgentState:
         f"{request_text}? This will help us reproduce the issue quickly."
     )
     return {"action": "needs-info", "draft_comment": comment}
+
+
+def _remember(state: AgentState) -> None:
+    """Persist the analyzed issue into the shared project memory (best-effort)."""
+    owner, repo = state.get("owner", ""), state.get("repo", "")
+    if not (owner and repo):
+        return
+    try:
+        issue = state.get("issue") or {}
+        text = f"{issue.get('title', '')}\n{issue.get('body') or ''}"
+        embedder = memory_store.build_embedder()
+        memory_store.ingest(
+            owner,
+            repo,
+            [
+                {
+                    "id": f"issue-{issue.get('number', '')}",
+                    "text": text,
+                    "embedding": embedder.embed_query(text),
+                    "metadata": {
+                        "kind": "issue",
+                        "number": issue.get("number", 0),
+                        "issue_type": state.get("issue_type", ""),
+                        "action": state.get("action", ""),
+                        "missing_fields": ",".join(state.get("missing_fields", [])),
+                        "created_at": issue.get("created_at", ""),
+                    },
+                }
+            ],
+        )
+    except Exception:
+        pass
 
 
 def build_graph() -> Any:
