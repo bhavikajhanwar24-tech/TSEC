@@ -588,12 +588,11 @@ function BacklogDetail({ result }) {
       {items.length > 0 && (
         <div className="backlog-action-list">
           {items.map((item) => {
-            const action =
-              BACKLOG_ACTIONS[item.action_recommendation] || {
-                label: item.action_recommendation || "Unknown",
-                icon: "•",
-                cls: "ok",
-              };
+            const action = BACKLOG_ACTIONS[item.action_recommendation] || {
+              label: item.action_recommendation || "Unknown",
+              icon: "•",
+              cls: "ok",
+            };
             return (
               <div className="backlog-action-card" key={item.issue_number}>
                 <div className="backlog-action-heading">
@@ -609,7 +608,9 @@ function BacklogDetail({ result }) {
                   — {item.reasoning}
                 </p>
                 {item.suggested_comment && (
-                  <pre className="suggested-comment">{item.suggested_comment}</pre>
+                  <pre className="suggested-comment">
+                    {item.suggested_comment}
+                  </pre>
                 )}
               </div>
             );
@@ -632,12 +633,12 @@ function AgentResultDetail({ agent }) {
   const highlights = resultHighlights(result);
   const recommendation =
     agent.key === "backlog"
-      ? (result.summary || result.reasoning || "")
-      : (result.recommendation ||
+      ? result.summary || result.reasoning || ""
+      : result.recommendation ||
         result.draft_comment ||
         result.report ||
         result.summary ||
-        result.reasoning);
+        result.reasoning;
   const matches = result.matches?.slice(0, 4) || [];
   return (
     <div className="agent-detail-body">
@@ -1238,6 +1239,7 @@ function RepositoryOverviewDashboard({
   setActiveTab,
   onBack,
   workflowStatuses,
+  escalationDecisions,
 }) {
   const {
     repo,
@@ -1255,6 +1257,9 @@ function RepositoryOverviewDashboard({
     (issue) =>
       workflowStatuses[issue.number] &&
       workflowStatuses[issue.number] !== "complete",
+  );
+  const escalationIssues = issues.filter(
+    (issue) => escalationDecisions[issue.number]?.needsAttention,
   );
   const resolvedIssues = issues.filter(
     (issue) =>
@@ -1336,7 +1341,7 @@ function RepositoryOverviewDashboard({
             >
               <span className="repo-nav-icon">⚠</span>
               Escalations
-              <small>{workflowIssues.length}</small>
+              <small>{escalationIssues.length}</small>
             </button>
           </nav>
           <RepositoryChatButton
@@ -1367,7 +1372,7 @@ function RepositoryOverviewDashboard({
               label="Total issues"
               value={issues.filter((issue) => !issue.pull_request).length}
             />
-            <Stat label="Escalations" value={workflowIssues.length} />
+            <Stat label="Escalations" value={escalationIssues.length} />
             <Stat label="Auto resolved" value={resolvedIssues.length} />
             <Stat label="Contributors" value={contributors.length} />
           </section>
@@ -1546,6 +1551,7 @@ function RepositoryTabDashboard({
   setActiveTab,
   onBack,
   workflowStatuses,
+  escalationDecisions,
 }) {
   const {
     repo,
@@ -1564,9 +1570,7 @@ function RepositoryTabDashboard({
   const openPulls = pulls.filter((pull) => pull.state === "open");
   const escalationIssues = issues.filter(
     (issue) =>
-      !issue.pull_request &&
-      workflowStatuses[issue.number] &&
-      !["complete", "queued"].includes(workflowStatuses[issue.number]),
+      !issue.pull_request && escalationDecisions[issue.number]?.needsAttention,
   );
   const content = {
     Issues: (
@@ -1801,6 +1805,7 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
   const languages = Object.keys(repo.language ? { [repo.language]: true } : {});
   const [selectedIssue, setSelectedIssue] = useState(null);
   const [workflowStatuses, setWorkflowStatuses] = useState({});
+  const [escalationDecisions, setEscalationDecisions] = useState({});
 
   useEffect(() => {
     api(`/api/webhooks/analysis/${repo.owner.login}/${repo.name}`)
@@ -1812,6 +1817,18 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
         );
       })
       .catch(() => setWorkflowStatuses({}));
+    api(`/api/issues/${repo.owner.login}/${repo.name}/escalations`)
+      .then(({ decisions }) => {
+        setEscalationDecisions(
+          Object.fromEntries(
+            (decisions || []).map((decision) => [
+              decision.issue.number,
+              decision,
+            ]),
+          ),
+        );
+      })
+      .catch(() => setEscalationDecisions({}));
   }, [repo.owner.login, repo.name]);
 
   if (activeTab === "Overview")
@@ -1822,6 +1839,7 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
         setActiveTab={setActiveTab}
         onBack={onBack}
         workflowStatuses={workflowStatuses}
+        escalationDecisions={escalationDecisions}
       />
     );
   if (activeTab !== "Overview" && typeof onBack === "function")
@@ -1832,6 +1850,7 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
         setActiveTab={setActiveTab}
         onBack={onBack}
         workflowStatuses={workflowStatuses}
+        escalationDecisions={escalationDecisions}
       />
     );
 
