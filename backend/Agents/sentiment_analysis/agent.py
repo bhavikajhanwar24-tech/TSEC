@@ -29,6 +29,7 @@ class ToneAnalysis(BaseModel):
     sentiment_score: float = Field(..., description="Score from -1.0 (hostile/very clipped) to 1.0 (very friendly).")
     contention_indicators: List[str] = Field(..., description="Key phrases or signals indicating contention (e.g., repeated re-opens, change requests).")
     core_disagreement: str = Field(..., description="Concise description of the core disagreement between the parties.")
+    code_of_conduct_flags: List[str] = Field(..., description="Specific possible code-of-conduct concerns such as harassment, personal attacks, threats, or discriminatory language.")
 
 # Define the Pydantic schema for Final Precedent Synthesis
 class SynthesisResult(BaseModel):
@@ -68,6 +69,7 @@ Please perform a tone and pattern analysis:
 2. Measure the overall sentiment score from -1.0 (very contentious/hostile) to 1.0 (very positive/agreeable).
 3. Extract the primary disagreement point.
 4. List specific contention indicators.
+6. Flag possible code-of-conduct concerns separately from ordinary technical disagreement.
 """),
 ])
 
@@ -100,6 +102,7 @@ def run_heuristic_tone_analysis(pr_or_issue: Dict[str, Any], repo_norms: Dict[st
     is_contentious = False
     sentiment_score = 0.0
     indicators = []
+    code_of_conduct_flags = []
     core_disagreement = "No active contention detected."
     
     # 1. Check volume spike
@@ -110,6 +113,12 @@ def run_heuristic_tone_analysis(pr_or_issue: Dict[str, Any], repo_norms: Dict[st
         
     # 2. Check tone indicators in comments (e.g. clipped or disagreement words)
     disagree_keywords = ["don't agree", "disagree", "breaking", "backward compatibility", "why did you", "clipped", "revert"]
+    conduct_keywords = {
+        "harassment": ("harass", "bully", "bullying"),
+        "personal attack": ("idiot", "stupid", "incompetent", "shut up"),
+        "threatening language": ("threat", "you'll regret", "i will find you"),
+        "discriminatory language": ("racist", "sexist", "slur"),
+    }
     change_request_count = 0
     
     for c in comments:
@@ -121,6 +130,11 @@ def run_heuristic_tone_analysis(pr_or_issue: Dict[str, Any], repo_norms: Dict[st
                 indicators.append(f"Disagreement keyword found: '{kw}'")
                 is_contentious = True
                 sentiment_score -= 0.15
+        for flag, terms in conduct_keywords.items():
+            if any(term in body for term in terms):
+                code_of_conduct_flags.append(flag)
+                is_contentious = True
+                sentiment_score -= 0.25
                 
     if change_request_count >= 2:
         is_contentious = True
@@ -141,7 +155,24 @@ def run_heuristic_tone_analysis(pr_or_issue: Dict[str, Any], repo_norms: Dict[st
         "is_contentious": is_contentious,
         "sentiment_score": sentiment_score,
         "contention_indicators": list(set(indicators)),
-        "core_disagreement": core_disagreement
+        "core_disagreement": core_disagreement,
+        "code_of_conduct_flags": list(set(code_of_conduct_flags)),
+    }
+
+def add_escalation_signal(analysis: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert sentiment heat into a bounded multiplier for downstream agents."""
+    score = float(analysis.get("sentiment_score", 0.0))
+    flags = analysis.get("code_of_conduct_flags", [])
+    heat = max(0.0, min(1.0, (-score + 1.0) / 2.0))
+    multiplier = 1.0 + (0.75 * heat)
+    if analysis.get("is_contentious"):
+        multiplier += 0.15
+    if flags:
+        multiplier += min(0.35, 0.1 * len(flags))
+    return {
+        **analysis,
+        "sentiment_heat": round(heat, 3),
+        "escalation_multiplier": round(min(2.25, multiplier), 3),
     }
 
 def analyze_activity_tone_node(state: SentimentState) -> Dict[str, Any]:
@@ -183,7 +214,8 @@ def analyze_activity_tone_node(state: SentimentState) -> Dict[str, Any]:
                 "is_contentious": res_pydantic.is_contentious,
                 "sentiment_score": res_pydantic.sentiment_score,
                 "contention_indicators": res_pydantic.contention_indicators,
-                "core_disagreement": res_pydantic.core_disagreement
+                "core_disagreement": res_pydantic.core_disagreement,
+                "code_of_conduct_flags": res_pydantic.code_of_conduct_flags,
             }
         except Exception as e:
             print(f"[WARNING] LLM Tone Analysis failed: {e}. Falling back to heuristics.")
@@ -193,9 +225,7 @@ def analyze_activity_tone_node(state: SentimentState) -> Dict[str, Any]:
         print(f"[INFO] Analyzing PR/Issue #{pr.get('number')} tone using heuristics...")
         analysis = run_heuristic_tone_analysis(pr, norms)
         
-    return {
-        "analysis_results": analysis
-    }
+    return {"analysis_results": add_escalation_signal(analysis)}
 
 def search_precedents_node(state: SentimentState) -> Dict[str, Any]:
     """Retrieves real historical precedents from the repo via GitHub search
@@ -380,6 +410,9 @@ def synthesize_findings_node(state: SentimentState) -> Dict[str, Any]:
     report += f"### PR/Issue #{pr.get('number')}: \"{pr.get('title')}\"\n"
     report += f"- **Needs Human Judgment:** {'🚨 **YES**' if synthesis['needs_human_judgment'] else '✅ **NO**'}\n"
     report += f"- **Sentiment Score:** {analysis.get('sentiment_score')} (Range: -1.0 to 1.0)\n"
+    report += f"- **Sentiment Heat:** {analysis.get('sentiment_heat')}\n"
+    report += f"- **Escalation Multiplier:** {analysis.get('escalation_multiplier')}x\n"
+    report += f"- **Code-of-Conduct Flags:** {', '.join(analysis.get('code_of_conduct_flags', [])) or 'None detected'}\n"
     report += f"- **Core Disagreement:** {analysis.get('core_disagreement')}\n"
     report += f"- **Contention Signals:** {', '.join(analysis.get('contention_indicators', []))}\n\n"
     report += "## Precedent & Resolution Summary\n"
