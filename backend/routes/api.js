@@ -39,7 +39,7 @@ router.get("/repos", async (req, res) => {
 
     while (true) {
       const params = new URLSearchParams({
-        visibility: "all",
+        type: "all",
         affiliation: "owner,collaborator,organization_member",
         per_page: "100",
         page: String(page),
