@@ -249,7 +249,6 @@ def build_llm() -> Optional[ChatNVIDIA]:
         temperature=0.1,
         top_p=1,
         max_completion_tokens=4096,
-        model_kwargs={"reasoning_budget": 4096},
     )
 
 
