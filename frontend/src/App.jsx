@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://tsec-qjcg.onrender.com'
-const tabs = ['Overview', 'Issues', 'Pull requests', 'Commits', 'Contributors', 'Code changes', 'AI Agents']
+const tabs = ['Overview', 'Issues', 'Pull requests', 'Commits', 'Contributors', 'Code changes']
 
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -34,8 +34,8 @@ function EmptyState({ children }) {
   return <div className="empty-state">{children}</div>
 }
 
-function IssueRow({ item, pull = false }) {
-  return <article className="activity-row"><span className={`state-dot ${item.state === 'open' ? 'open' : 'closed'}`}>{pull ? '↗' : '#'}</span><div><h3>{item.title}</h3><p>#{item.number} opened by {item.user?.login || 'unknown'} · {formatDate(item.created_at)}</p></div><span className="row-state">{item.state}</span></article>
+function IssueRow({ item, pull = false, onClick }) {
+  return <button className="activity-row issue-button" type="button" onClick={() => onClick?.(item)}><span className={`state-dot ${item.state === 'open' ? 'open' : 'closed'}`}>{pull ? '↗' : '#'}</span><div><h3>{item.title}</h3><p>#{item.number} opened by {item.user?.login || 'unknown'} · {formatDate(item.created_at)}</p></div><span className="row-state">{item.state}</span><span className="issue-arrow">→</span></button>
 }
 
 function CommitRow({ commit, owner, repo }) {
@@ -73,87 +73,39 @@ function CodeChanges({ values, pending }) {
   return <div className="chart"><div className="chart-bars">{points.map((point) => <div className="bar-group" key={point[0]} title={`${point[1]} additions, ${Math.abs(point[2])} deletions`}><span className="bar additions" style={{ height: `${(point[1] / max) * 100}%` }} /><span className="bar deletions" style={{ height: `${(Math.abs(point[2]) / max) * 100}%` }} /></div>)}</div><div className="chart-legend"><span><i className="legend-additions" /> Additions</span><span><i className="legend-deletions" /> Deletions</span></div></div>
 }
 
-function AgentResult({ result }) {
-  const highlight = typeof result?.summary === 'string' ? result.summary
-    : typeof result?.conclusion === 'string' ? result.conclusion
-    : typeof result?.report === 'string' ? result.report
-    : typeof result?.verdict === 'string' ? result.verdict : null
-  return <div className="agent-result">
-    {highlight && <p className="agent-summary">{highlight}</p>}
-    <pre>{JSON.stringify(result, null, 2)}</pre>
-  </div>
-}
+const automaticAgents = [
+  ['duplicate', 'Duplicate check', 'Compares this issue with open issue history.'],
+  ['missingInfo', 'Missing information', 'Checks whether the report is actionable.'],
+  ['sensitivity', 'Security sensitivity', 'Scans for secrets and security concerns.'],
+  ['sentiment', 'Sentiment', 'Measures conversation tone and contention.'],
+  ['backlog', 'Backlog context', 'Places the issue in repository-wide work context.'],
+  ['health', 'Repository health', 'Summarizes current project health signals.'],
+]
 
-function AgentRunner({ label, hint, run, disabled = false }) {
-  const [status, setStatus] = useState('idle')
-  const [result, setResult] = useState(null)
-  const [message, setMessage] = useState('')
-  const running = status === 'running'
+function AgentAnalysisView({ owner, repo, issue, onClose }) {
+  const [analysis, setAnalysis] = useState(null)
+  const [error, setError] = useState('')
 
-  async function onClick() {
-    if (running || disabled) return
-    setStatus('running')
-    setResult(null)
-    setMessage('')
-    try {
-      setResult(await run())
-      setStatus('done')
-    } catch (err) {
-      setMessage(err.message)
-      setStatus('error')
+  useEffect(() => {
+    let active = true
+    async function load() {
+      try {
+        const result = await api(`/api/webhooks/analysis/${owner}/${repo}/${issue.number}`)
+        if (active) { setAnalysis(result); setError('') }
+      } catch (requestError) {
+        if (active) setError(requestError.message)
+      }
     }
-  }
+    load()
+    const timer = setInterval(load, 4000)
+    return () => { active = false; clearInterval(timer) }
+  }, [owner, repo, issue.number])
 
-  return <div className="agent-runner">
-    <div className="agent-runner-head">
-      <div>
-        <h3>{label}</h3>
-        {hint && <p>{hint}</p>}
-      </div>
-      <button className="outline-button" type="button" disabled={running || disabled} onClick={onClick}>
-        {running ? <span className="loader loader-small" /> : 'Run agent'}
-      </button>
-    </div>
-    {message && <p className="detail-error">{message}</p>}
-    {result && <AgentResult result={result} />}
-  </div>
-}
+  const agents = automaticAgents.map(([key, label, hint]) => ({ key, label, hint, ...(analysis?.agents?.[key] || { status: 'waiting' }) }))
+  const complete = agents.filter((agent) => agent.status === 'complete').length
+  const failed = agents.filter((agent) => agent.status === 'failed').length
 
-function AgentsPanel({ owner, repo, issues }) {
-  const openIssues = issues.filter((issue) => !issue.pull_request && issue.state === 'open')
-  const [issueNumber, setIssueNumber] = useState(openIssues[0]?.number || '')
-
-  return <div className="agents-panel">
-    <div className="panel">
-      <div className="panel-heading">
-        <div><p className="eyebrow">Repository-wide</p><h2>Insight agents</h2></div>
-        <span className="count-label">Runs against the whole repository</span>
-      </div>
-      <div className="agent-grid">
-        <AgentRunner label="Backlog sweep" hint="Finds stale, forgotten issues and untriaged work." run={() => api('/api/agents/backlog-sweep', { method: 'POST', body: { owner, repo } })} />
-        <AgentRunner label="Health report" hint="Tracks activity trends and flags declining contributors." run={() => api('/api/agents/health-report', { method: 'POST', body: { owner, repo } })} />
-      </div>
-    </div>
-    <div className="panel">
-      <div className="panel-heading">
-        <div><p className="eyebrow">Issue-level</p><h2>Triage agents</h2></div>
-        <span className="count-label">Analyze a single open issue</span>
-      </div>
-      <label className="agent-issue-picker">
-        <span>Issue</span>
-        <select value={issueNumber} onChange={(event) => setIssueNumber(Number(event.target.value))}>
-          {openIssues.map((issue) => <option key={issue.id} value={issue.number}>#{issue.number} · {issue.title}</option>)}
-        </select>
-      </label>
-      {!openIssues.length && <p className="detail-muted">No open issues to analyze.</p>}
-      <div className="agent-grid">
-        <AgentRunner label="Duplicate check" hint="Finds existing issues that this one duplicates." disabled={!issueNumber} run={() => api('/api/agents/duplicate-check', { method: 'POST', body: { owner, repo, issueNumber } })} />
-        <AgentRunner label="Missing info" hint="Lists missing details that block triage." disabled={!issueNumber} run={() => api('/api/agents/missing-info', { method: 'POST', body: { owner, repo, issueNumber } })} />
-        <AgentRunner label="Sensitivity check" hint="Flags sensitive or security-related content." disabled={!issueNumber} run={() => api('/api/agents/sensitivity-check', { method: 'POST', body: { owner, repo, issueNumber } })} />
-        <AgentRunner label="Sentiment analysis" hint="Reads the tone of issue and pull request discussions." disabled={!issueNumber} run={() => api('/api/agents/sentiment-analysis', { method: 'POST', body: { owner, repo, issueNumber } })} />
-      </div>
-    </div>
-  </div>
+  return <div className="analysis-overlay"><div className="analysis-drawer"><div className="analysis-header"><div><p className="eyebrow">Automatic triage</p><h2>Issue #{issue.number}</h2><p>{issue.title}</p></div><button className="close-button" type="button" onClick={onClose}>×</button></div><div className="analysis-issue"><span className="issue-number">#{issue.number}</span><div><strong>{issue.title}</strong><p>{issue.body || 'No description provided.'}</p></div></div><div className="analysis-summary"><div><strong>{complete}/{agents.length}</strong><span>agents complete</span></div><div><strong>{analysis?.status === 'complete' ? 'Ready' : 'Running'}</strong><span>analysis status</span></div><div><strong>{failed}</strong><span>errors</span></div></div>{error && <p className="detail-error">{error}</p>}<div className="agent-result-grid">{agents.map((agent) => <article className="agent-result-card" key={agent.key}><div className="agent-card-heading"><div><h3>{agent.label}</h3><p>{agent.hint}</p></div><span className={`agent-status ${agent.status}`}>{agent.status}</span></div>{agent.status === 'running' && <div className="agent-progress"><span /></div>}{agent.error && <p className="detail-error">{agent.error}</p>}{agent.result && <pre>{JSON.stringify(agent.result, null, 2)}</pre>}</article>)}</div></div></div>
 }
 
 function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
@@ -161,6 +113,7 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
   const openIssues = issues.filter((issue) => !issue.pull_request && issue.state === 'open')
   const openPulls = pulls.filter((pull) => pull.state === 'open')
   const languages = Object.keys(repo.language ? { [repo.language]: true } : {})
+  const [selectedIssue, setSelectedIssue] = useState(null)
 
   return <div className="detail-page">
     <button className="back-button" type="button" onClick={onBack}>← All repositories</button>
@@ -172,13 +125,13 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
     <nav className="tabs" aria-label="Repository sections">{tabs.map((tab) => <button className={activeTab === tab ? 'active' : ''} type="button" key={tab} onClick={() => setActiveTab(tab)}>{tab}{tab === 'Issues' && <small>{issues.length}</small>}{tab === 'Pull requests' && <small>{pulls.length}</small>}</button>)}</nav>
     <section className="tab-content">
       {activeTab === 'Overview' && <div className="overview-grid"><div className="panel"><p className="eyebrow">About this repository</p><h2>Project snapshot</h2><dl className="details-list"><div><dt>Default branch</dt><dd>{repo.default_branch}</dd></div><div><dt>License</dt><dd>{repo.license?.name || 'Not specified'}</dd></div><div><dt>Created</dt><dd>{formatDate(repo.created_at)}</dd></div><div><dt>Last updated</dt><dd>{formatDate(repo.updated_at)}</dd></div></dl></div><div className="panel"><p className="eyebrow">Project signals</p><h2>At a glance</h2><div className="signal-list"><div><span>Primary language</span><strong>{languages[0] || 'Not specified'}</strong></div><div><span>Repository size</span><strong>{Math.round(repo.size / 1024)} MB</strong></div><div><span>Visibility</span><strong>{repo.private ? 'Private' : 'Public'}</strong></div></div></div></div>}
-      {activeTab === 'Issues' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Work tracking</p><h2>Issues</h2></div><span className="count-label">{issues.length} total</span></div>{issues.filter((issue) => !issue.pull_request).map((issue) => <IssueRow item={issue} key={issue.id} />)}{!issues.filter((issue) => !issue.pull_request).length && <EmptyState>No issues found.</EmptyState>}</div>}
+      {activeTab === 'Issues' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Work tracking</p><h2>Issues</h2></div><span className="count-label">{issues.length} total · click to inspect</span></div>{issues.filter((issue) => !issue.pull_request).map((issue) => <IssueRow item={issue} onClick={setSelectedIssue} key={issue.id} />)}{!issues.filter((issue) => !issue.pull_request).length && <EmptyState>No issues found.</EmptyState>}</div>}
       {activeTab === 'Pull requests' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Code review</p><h2>Pull requests</h2></div><span className="count-label">{openPulls.length} open</span></div>{pulls.map((pull) => <IssueRow item={pull} pull key={pull.id} />)}{!pulls.length && <EmptyState>No pull requests found.</EmptyState>}</div>}
       {activeTab === 'Commits' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Repository history</p><h2>Recent commits</h2></div><span className="count-label">Latest 30</span></div>{commits.map((commit) => <CommitRow commit={commit} owner={repo.owner.login} repo={repo.name} key={commit.sha} />)}{!commits.length && <EmptyState>No commits found.</EmptyState>}</div>}
       {activeTab === 'Contributors' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">People behind the code</p><h2>Contributors</h2></div><span className="count-label">{contributors.length} people</span></div>{contributors.map((contributor) => <ContributorRow contributor={contributor} key={contributor.id} />)}{!contributors.length && <EmptyState>No contributor data found.</EmptyState>}</div>}
       {activeTab === 'Code changes' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Repository activity</p><h2>Code changes</h2></div><span className="count-label">Weekly view</span></div><CodeChanges values={codeFrequency} pending={codeFrequencyPending} /></div>}
-      {activeTab === 'AI Agents' && <AgentsPanel owner={repo.owner.login} repo={repo.name} issues={issues} />}
     </section>
+    {selectedIssue && <AgentAnalysisView owner={repo.owner.login} repo={repo.name} issue={selectedIssue} onClose={() => setSelectedIssue(null)} />}
   </div>
 }
 
