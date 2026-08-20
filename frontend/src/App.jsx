@@ -1137,6 +1137,61 @@ function isoWeekKey(isoString) {
   return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
 }
 
+function HealthOverviewChart({ series, labels }) {
+  const metricConfigs = [
+    { key: "time_to_first_response_days", label: "Response time", color: "#d66b61", suffix: " days" },
+    { key: "backlog_size", label: "Backlog size", color: "#4d79bb", suffix: " issues" },
+    { key: "incoming_volume", label: "Open issues", color: "#d99a32", suffix: " issues" },
+    { key: "close_open_ratio", label: "Close rate", color: "#38a89d", suffix: "" },
+  ];
+  const metrics = metricConfigs
+    .map((config) => ({ ...config, values: Array.isArray(series[config.key]) ? series[config.key] : [] }))
+    .filter((config) => config.values.length > 1);
+  if (!metrics.length || !labels.length) return null;
+
+  const width = 760;
+  const height = 260;
+  const padding = { top: 20, right: 18, bottom: 38, left: 38 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const pointCount = Math.min(labels.length, ...metrics.map((metric) => metric.values.length));
+  const visibleLabels = labels.slice(-pointCount);
+  const x = (index) => padding.left + (pointCount === 1 ? plotWidth / 2 : (index / (pointCount - 1)) * plotWidth);
+  const normalized = metrics.map((metric) => {
+    const values = metric.values.slice(-pointCount);
+    const max = Math.max(...values.map((value) => Number(value) || 0), 1);
+    return { ...metric, values, max, points: values.map((value) => padding.top + plotHeight - ((Number(value) || 0) / max) * plotHeight) };
+  });
+  const labelsEvery = Math.max(1, Math.ceil(pointCount / 6));
+  return (
+    <section className="health-overview-chart-card">
+      <div className="health-chart-heading">
+        <div>
+          <strong>Health over time</strong>
+          <span>weekly metric movement · indexed to each metric&apos;s range</span>
+        </div>
+        <span>{visibleLabels[0]} → {visibleLabels[visibleLabels.length - 1]}</span>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} className="health-overview-chart" role="img" aria-label="Repository health metrics over time">
+        {[0, 25, 50, 75, 100].map((value) => {
+          const y = padding.top + plotHeight - (value / 100) * plotHeight;
+          return <g key={value}><line className="health-overview-grid-line" x1={padding.left} x2={width - padding.right} y1={y} y2={y} /><text className="health-overview-axis-label" x={padding.left - 8} y={y + 4} textAnchor="end">{value}</text></g>;
+        })}
+        {normalized.map((metric) => (
+          <g key={metric.key}>
+            <polyline className="health-overview-line" points={metric.points.map((y, index) => `${x(index)},${y}`).join(" ")} stroke={metric.color} />
+            {metric.points.map((y, index) => <circle key={`${metric.key}-${index}`} cx={x(index)} cy={y} r="2.6" fill={metric.color}><title>{`${visibleLabels[index]} · ${metric.label}: ${metric.values[index]}${metric.suffix}`}</title></circle>)}
+          </g>
+        ))}
+        {visibleLabels.map((label, index) => index % labelsEvery === 0 ? <text className="health-overview-date-label" key={label} x={x(index)} y={height - 12} textAnchor="middle">{label}</text> : null)}
+      </svg>
+      <div className="health-overview-legend">
+        {normalized.map((metric) => <span key={metric.key}><i style={{ background: metric.color }} />{metric.label}</span>)}
+      </div>
+    </section>
+  );
+}
+
 function HealthTrendDetail({ result }) {
   const series = result.series || {};
   const labels = result.week_labels || [];
@@ -1251,6 +1306,7 @@ function HealthTrendDetail({ result }) {
           )}
         </div>
       )}
+      <HealthOverviewChart series={series} labels={labels} />
       <div className="health-chart-grid">
         {has("time_to_first_response_days") && (
           <TrendChart
