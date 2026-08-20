@@ -62,16 +62,17 @@ router.post("/:owner/:repo/moderation/:number", async (req, res) => {
   const { owner, repo, number } = req.params;
   const assignee = String(req.body?.assignee || "").trim();
   const reopen = req.body?.reopen === true;
-  if (!assignee && !reopen) return res.status(400).json({ error: "Choose a collaborator or request reopen" });
+  const undo = req.body?.undo === true;
+  if (!assignee && !reopen && !undo) return res.status(400).json({ error: "Choose a collaborator, request reopen, or undo the assignment" });
   try {
     const response = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/issues/${number}`, {
       method: "PATCH",
       headers: githubHeaders(req.session.githubToken),
-      body: JSON.stringify({ ...(assignee ? { assignees: [assignee] } : {}), ...(reopen ? { state: "open", state_reason: "reopened" } : {}) }),
+      body: JSON.stringify({ ...(assignee ? { assignees: [assignee] } : {}), ...(undo ? { assignees: [], state: "open", state_reason: "reopened" } : {}), ...(reopen ? { state: "open", state_reason: "reopened" } : {}) }),
     });
     const result = await response.json();
     if (!response.ok) return res.status(response.status).json({ error: result.message || "GitHub moderator action failed" });
-    return res.json({ issue: result, assigned: assignee || null, reopened: reopen });
+    return res.json({ issue: result, assigned: assignee || null, reopened: reopen || undo, undone: undo });
   } catch (error) {
     console.error("Moderator action failed:", error.message);
     return res.status(500).json({ error: "Moderator action failed" });

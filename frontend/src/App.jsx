@@ -2208,14 +2208,16 @@ function ModeratorPanel({ context, onAction }) {
     setMessage("");
     try {
       await onAction(payload);
-      setMessage(payload.reopen ? "Issue reopened." : `Assigned to @${payload.assignee}.`);
+      setMessage(payload.undo ? "Assignment undone and issue reopened." : payload.reopen ? "Issue reopened." : `Assigned to @${payload.assignee}.`);
     } catch (error) {
       setMessage(error.message);
     } finally {
       setBusy(false);
     }
   }
-  return <section className="moderator-panel"><div className="escalation-evidence-heading"><div><p className="eyebrow">Moderator controls</p><h3>Assign or restore ownership</h3></div><span className="count-label">GitHub source of truth</span></div><div className="moderator-actions"><select value={assignee} onChange={(event) => setAssignee(event.target.value)} disabled={busy}><option value="">Choose collaborator</option>{(context.collaborators || []).map((person) => <option value={person.login} key={person.login}>@{person.login}</option>)}</select><button type="button" className="primary-button" disabled={busy || !assignee} onClick={() => act({ assignee })}>Assign task</button>{context.issue?.state === "closed" && <button type="button" className="outline-button" disabled={busy} onClick={() => act({ reopen: true })}>Reopen issue</button>}</div><div className="moderator-suggestions"><strong>Suggested people</strong>{(context.suggestions || []).map((suggestion) => <button type="button" key={suggestion.login} onClick={() => setAssignee(suggestion.login)}><span>@{suggestion.login}</span><small>{suggestion.score}/100 · {suggestion.reasons.join(", ")}</small></button>)}</div>{message && <p className="detail-muted">{message}</p>}</section>;
+  const suggestions = context.suggestions || [];
+  const nextSuggestion = suggestions.find((suggestion) => suggestion.login !== assignee) || suggestions[0];
+  return <section className="moderator-panel"><div className="escalation-evidence-heading"><div><p className="eyebrow">Moderator controls</p><h3>Assign or restore ownership</h3></div><span className="count-label">GitHub source of truth</span></div><div className="moderator-actions"><select value={assignee} onChange={(event) => setAssignee(event.target.value)} disabled={busy}><option value="">Choose collaborator</option>{(context.collaborators || []).map((person) => <option value={person.login} key={person.login}>@{person.login}</option>)}</select><button type="button" className="primary-button" disabled={busy || !assignee} onClick={() => act({ assignee })}>Assign task</button><button type="button" className="outline-button" disabled={busy || !nextSuggestion} onClick={() => act({ assignee: nextSuggestion?.login })}>Assign next suggestion</button>{(context.issue?.assignees?.length > 0 || context.issue?.state === "closed") && <button type="button" className="outline-button" disabled={busy} onClick={() => act({ undo: true })}>Undo assignment</button>}{context.issue?.state === "closed" && <button type="button" className="outline-button" disabled={busy} onClick={() => act({ reopen: true })}>Reopen issue</button>}</div><div className="moderator-suggestions"><strong>Suggested people</strong>{suggestions.map((suggestion) => <button type="button" key={suggestion.login} onClick={() => setAssignee(suggestion.login)}><span>@{suggestion.login}</span><small>{suggestion.score}/100 · {suggestion.reasons.join(", ")}</small></button>)}</div>{message && <p className="detail-muted">{message}</p>}</section>;
 }
 
 function PlannerPanel({ planner }) {
