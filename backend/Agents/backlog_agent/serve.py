@@ -56,16 +56,24 @@ def _gh_get(url, headers, params=None):
     return items
 
 
-def fetch_open_issues(owner, repo, token, limit=100):
-    """Fetch open issues (no PRs) plus comment history, mapped to the shape the
-    backlog agent's LangGraph expects."""
+def fetch_open_issues(owner, repo, token, limit=40):
+    """Fetch open issues (no PRs), keep only the stalest `limit`, then fetch
+    comment history for those. Bounding the sweep by staleness keeps the run
+    fast even on repos with hundreds of open issues."""
     headers = github_headers(token)
     raw = _gh_get(
         f"{API}/repos/{owner}/{repo}/issues",
         headers,
         {"state": "open", "per_page": 100, "sort": "updated", "direction": "desc"},
     )
-    issues = [i for i in raw if "pull_request" not in i][:limit]
+    issues = [i for i in raw if "pull_request" not in i]
+
+    # issues are returned most-recently-updated first; the stalest are at the
+    # end. Sort by last update ascending and keep the stalest `limit`.
+    issues.sort(
+        key=lambda i: datetime.fromisoformat(i["updated_at"].replace("Z", "+00:00"))
+    )
+    issues = issues[:limit]
 
     now = datetime.now(timezone.utc)
     out = []

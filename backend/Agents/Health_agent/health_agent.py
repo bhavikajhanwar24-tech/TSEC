@@ -501,8 +501,48 @@ def node_drill_down(state: AgentState) -> AgentState:
     return {**state, "chunks": chunks, "retrieved": retrieved}
 
 
+def _contributor_activity(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Per-contributor activity summary for the UI and the capacity analysis.
+    `inactive` means no comment in the last 14 days."""
+    today = datetime.now(timezone.utc)
+    rows: List[Dict[str, Any]] = []
+    for user, info in raw.get("commenters", {}).items():
+        days_ago = max(0, (today - info["last_active"]).days)
+        rows.append(
+            {
+                "login": user,
+                "comments": info["count"],
+                "last_active_days_ago": days_ago,
+                "inactive": days_ago >= 14,
+            }
+        )
+    rows.sort(key=lambda r: (not r["inactive"], r["last_active_days_ago"], -r["comments"]))
+    return rows
+
+
+def _metric_phrase(trend: Dict[str, Any]) -> str:
+    """'median time-to-first-response climbed from 2 days → 9 days (x4.5)'."""
+    base, recent, ratio = trend["baseline_value"], trend["recent_value"], trend["change_ratio"]
+    if trend["metric"] == "time_to_first_response_days":
+        return f"median time-to-first-response climbed from {base} days → {recent} days (x{ratio})"
+    if trend["metric"] == "backlog_size":
+        return f"backlog grew from {int(base)} → {int(recent)} open issues"
+    if trend["metric"] == "incoming_volume":
+        return f"incoming issue volume rose from {int(base)} → {int(recent)} per week"
+    if trend["metric"] == "active_contributors":
+        return f"active contributors dropped from {int(base)} → {int(recent)} per week"
+    return f"{trend['display']} changed from {base} → {recent} (x{ratio})"
+
+
 def _heuristic_synthesize(state: AgentState) -> Dict[str, Any]:
+    """Deterministic narrative: real numbers from the series, cause attribution
+    (capacity vs demand), and a concrete recommendation. Runs even when the LLM
+    is unavailable so the Weekly Brief narrative is never generic."""
     trends = state["trends"]
+    series = state["series"]
+    labels = state["week_labels"]
+    contrib_rows = _contributor_activity(state.get("raw", {}))
+
     if not trends:
         return {
             "health_summary": "All tracked metrics are within baseline. No intervention needed this week.",
@@ -510,34 +550,80 @@ def _heuristic_synthesize(state: AgentState) -> Dict[str, Any]:
             "causes": [],
             "recommendation": "No action required; include a one-line 'healthy' status in the Weekly Brief.",
             "feeds_weekly_brief": True,
+            "series": series,
+            "week_labels": labels,
+            "contributor_activity": contrib_rows,
         }
+
     worst = trends[0]
+    vol = series.get("incoming_volume", [])
+    vol_ratio = None
+    if len(vol) >= 6:
+        vol_ratio = _safe_ratio(statistics.median(vol[-2:]), statistics.median(vol[-6:-2]))
+    quiet = [r for r in contrib_rows if r["inactive"]]
+    capacity = bool(quiet)
+    demand = bool(vol_ratio and vol_ratio >= 1.3)
+
     causes = []
-    for hit in state["retrieved"]:
-        if "contributor @" in hit["chunk"] and "last active" in hit["chunk"]:
-            causes.append({"cause": "maintainer capacity drop", "evidence": [hit["chunk"]], "confidence": "medium"})
-        if "release" in hit["chunk"] and "published" in hit["chunk"]:
-            causes.append({"cause": "release-driven activity", "evidence": [hit["chunk"]], "confidence": "low"})
-    # capacity vs demand check
-    vol = state["series"]["incoming_volume"]
-    vol_ratio = _safe_ratio(statistics.median(vol[-2:]), statistics.median(vol[-6:-2]))
-    if causes and vol_ratio and vol_ratio < 1.3:
-        causes[0]["evidence"].append("incoming issue volume stable (no demand spike)")
-        causes[0]["confidence"] = "high"
+    if capacity:
+        people = ", ".join(
+            f"@{r['login']} went inactive ~{r['last_active_days_ago']} days ago"
+            for r in quiet[:2]
+        )
+        causes.append(
+            {
+                "cause": "maintainer capacity drop",
+                "evidence": [f"contributor {people}"],
+                "confidence": "high" if not demand else "medium",
+            }
+        )
+    if demand:
+        causes.append(
+            {
+                "cause": "incoming issue volume spike",
+                "evidence": [f"incoming issue volume {round(vol_ratio, 2)}x the preceding weeks"],
+                "confidence": "medium",
+            }
+        )
     if not causes:
-        causes = [{"cause": "undetermined — no strong evidence in the changepoint window", "evidence": [], "confidence": "low"}]
+        causes = [
+            {
+                "cause": "undetermined — no strong evidence in the changepoint window",
+                "evidence": [],
+                "confidence": "low",
+            }
+        ]
+
+    if capacity and not demand:
+        driver = (
+            "driven by a drop in maintainer capacity ("
+            + ", ".join(f"@{r['login']} went inactive ~{r['last_active_days_ago']} days ago" for r in quiet[:2])
+            + ") rather than issue volume increase"
+        )
+    elif demand and not capacity:
+        driver = "driven by a spike in incoming issue volume"
+    elif capacity and demand:
+        driver = (
+            "driven by both a drop in maintainer capacity ("
+            + ", ".join(f"@{r['login']}" for r in quiet[:2])
+            + ") and rising issue volume"
+        )
+    else:
+        driver = "cause not yet identified"
+
+    recommendation = f"Flag the {worst['display']} inflection in the Weekly Brief."
+    if capacity:
+        recommendation += " Consider temporarily raising the auto-handle threshold to reduce load on the remaining maintainers."
+
     return {
-        "health_summary": (
-            f"{worst['display']} is worsening from {worst['baseline_value']} to "
-            f"{worst['recent_value']} (x{worst['change_ratio']}) around {worst['change_week']}."
-        ),
+        "health_summary": f"{_metric_phrase(worst)}, {driver}.",
         "trends": trends,
         "causes": causes,
-        "recommendation": (
-            f"Flag the {worst['display']} inflection in the Weekly Brief. "
-            + ("Consider raising the auto-handle threshold to reduce load on remaining maintainers." if any("capacity" in c["cause"] for c in causes) else "")
-        ),
+        "recommendation": recommendation,
         "feeds_weekly_brief": True,
+        "series": series,
+        "week_labels": labels,
+        "contributor_activity": contrib_rows,
     }
 
 
@@ -546,6 +632,7 @@ def node_synthesize(state: AgentState) -> AgentState:
     if llm is None:
         return {**state, "status": "complete", "result": {"status": "complete", **(_heuristic_synthesize(state))}}
 
+    baseline = _heuristic_synthesize(state)
     prompt = (
         "You are the Health-Trend Investigator of a GitHub maintenance platform, producing the Weekly Brief. "
         "Detected trends (JSON) and drill-down evidence retrieved around the changepoint are below. "
@@ -554,8 +641,11 @@ def node_synthesize(state: AgentState) -> AgentState:
         f"Repository: {state['owner']}/{state['repo']}, window: {state['weeks']} weeks\n\n"
         f"Detected trends:\n{json.dumps(state['trends'], indent=2)}\n\n"
         f"Retrieved changepoint evidence (RAG):\n{json.dumps(state['retrieved'], indent=2)}\n\n"
+        "Baseline narrative computed from the raw numbers (keep the same style and the real "
+        "figures; you may sharpen the wording but never change the numbers):\n"
+        f"{json.dumps(baseline, indent=2)}\n\n"
         "Respond with ONLY JSON:\n"
-        '{"health_summary": "<one or two sentences on overall health>", '
+        '{"health_summary": "<one or two sentences in the baseline narrative style, concrete numbers>", '
         '"trends": [<as given>], '
         '"causes": [{"cause": "<plausible cause>", "evidence": ["<evidence-linked>"], "confidence": "high"|"medium"|"low"}], '
         '"recommendation": "<actionable recommendation for the Weekly Brief>", '
@@ -566,6 +656,9 @@ def node_synthesize(state: AgentState) -> AgentState:
         raw = re.sub(r"^```(?:json)?|```$", "", raw).strip()
         parsed = json.loads(raw)
         parsed["trends"] = state["trends"]
+        parsed["series"] = state["series"]
+        parsed["week_labels"] = state["week_labels"]
+        parsed["contributor_activity"] = baseline["contributor_activity"]
         return {**state, "status": "complete", "result": {"status": "complete", **parsed}}
     except Exception as exc:
         fallback = _heuristic_synthesize(state)
