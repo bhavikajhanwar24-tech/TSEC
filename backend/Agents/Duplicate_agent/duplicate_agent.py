@@ -34,10 +34,12 @@ import math
 import os
 import re
 import sys
+from urllib.error import HTTPError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 from collections import Counter
 from typing import Any, Dict, List, Optional, TypedDict
 
-import requests
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIAEmbeddings
@@ -188,11 +190,19 @@ def _gh_get(url: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str,
     agent fails loudly instead of silently searching an empty corpus."""
     items: List[Dict[str, Any]] = []
     while url:
-        resp = requests.get(url, headers=_HEADERS, params=params, timeout=30)
-        resp.raise_for_status()
-        items.extend(resp.json())
+        request_url = f"{url}?{urlencode(params)}" if params else url
+        request = Request(request_url, headers=_HEADERS)
+        try:
+            with urlopen(request, timeout=30) as response:
+                page = json.loads(response.read().decode("utf-8"))
+                link_header = response.headers.get("Link", "")
+        except HTTPError as error:
+            raise RuntimeError(f"GitHub API request failed ({error.code}): {error.read().decode('utf-8', errors='replace')}") from error
+
+        items.extend(page)
         params = None
-        url = resp.links.get("next", {}).get("url", "")
+        next_match = re.search(r'<([^>]+)>;\s*rel="next"', link_header)
+        url = next_match.group(1) if next_match else ""
     return items
 
 
@@ -209,9 +219,12 @@ def fetch_corpus(owner: str, repo: str, limit: int = 200) -> List[Dict[str, Any]
 
 
 def fetch_issue(owner: str, repo: str, number: int) -> Dict[str, Any]:
-    resp = requests.get(f"{_API}/repos/{owner}/{repo}/issues/{number}", headers=_HEADERS, timeout=30)
-    resp.raise_for_status()
-    issue = resp.json()
+    request = Request(f"{_API}/repos/{owner}/{repo}/issues/{number}", headers=_HEADERS)
+    try:
+        with urlopen(request, timeout=30) as response:
+            issue = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        raise RuntimeError(f"GitHub API request failed ({error.code}): {error.read().decode('utf-8', errors='replace')}") from error
     issue["comments"] = [{"body": c["body"], "user": c["user"]["login"]} for c in _gh_get(issue["comments_url"])]
     return issue
 
