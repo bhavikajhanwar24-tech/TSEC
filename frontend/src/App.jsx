@@ -2,10 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://tsec-qjcg.onrender.com'
-const tabs = ['Overview', 'Issues', 'Pull requests', 'Commits', 'Contributors', 'Code changes']
+const tabs = ['Overview', 'Issues', 'Pull requests', 'Commits', 'Contributors', 'Code changes', 'AI Agents']
 
-async function api(path) {
-  const response = await fetch(`${API_BASE}${path}`, { credentials: 'include' })
+async function api(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: options.method || 'GET',
+    headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    credentials: 'include',
+  })
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
     throw new Error(body.error || `Request failed (${response.status})`)
@@ -68,6 +73,89 @@ function CodeChanges({ values, pending }) {
   return <div className="chart"><div className="chart-bars">{points.map((point) => <div className="bar-group" key={point[0]} title={`${point[1]} additions, ${Math.abs(point[2])} deletions`}><span className="bar additions" style={{ height: `${(point[1] / max) * 100}%` }} /><span className="bar deletions" style={{ height: `${(Math.abs(point[2]) / max) * 100}%` }} /></div>)}</div><div className="chart-legend"><span><i className="legend-additions" /> Additions</span><span><i className="legend-deletions" /> Deletions</span></div></div>
 }
 
+function AgentResult({ result }) {
+  const highlight = typeof result?.summary === 'string' ? result.summary
+    : typeof result?.conclusion === 'string' ? result.conclusion
+    : typeof result?.report === 'string' ? result.report
+    : typeof result?.verdict === 'string' ? result.verdict : null
+  return <div className="agent-result">
+    {highlight && <p className="agent-summary">{highlight}</p>}
+    <pre>{JSON.stringify(result, null, 2)}</pre>
+  </div>
+}
+
+function AgentRunner({ label, hint, run, disabled = false }) {
+  const [status, setStatus] = useState('idle')
+  const [result, setResult] = useState(null)
+  const [message, setMessage] = useState('')
+  const running = status === 'running'
+
+  async function onClick() {
+    if (running || disabled) return
+    setStatus('running')
+    setResult(null)
+    setMessage('')
+    try {
+      setResult(await run())
+      setStatus('done')
+    } catch (err) {
+      setMessage(err.message)
+      setStatus('error')
+    }
+  }
+
+  return <div className="agent-runner">
+    <div className="agent-runner-head">
+      <div>
+        <h3>{label}</h3>
+        {hint && <p>{hint}</p>}
+      </div>
+      <button className="outline-button" type="button" disabled={running || disabled} onClick={onClick}>
+        {running ? <span className="loader loader-small" /> : 'Run agent'}
+      </button>
+    </div>
+    {message && <p className="detail-error">{message}</p>}
+    {result && <AgentResult result={result} />}
+  </div>
+}
+
+function AgentsPanel({ owner, repo, issues }) {
+  const openIssues = issues.filter((issue) => !issue.pull_request && issue.state === 'open')
+  const [issueNumber, setIssueNumber] = useState(openIssues[0]?.number || '')
+
+  return <div className="agents-panel">
+    <div className="panel">
+      <div className="panel-heading">
+        <div><p className="eyebrow">Repository-wide</p><h2>Insight agents</h2></div>
+        <span className="count-label">Runs against the whole repository</span>
+      </div>
+      <div className="agent-grid">
+        <AgentRunner label="Backlog sweep" hint="Finds stale, forgotten issues and untriaged work." run={() => api('/api/agents/backlog-sweep', { method: 'POST', body: { owner, repo } })} />
+        <AgentRunner label="Health report" hint="Tracks activity trends and flags declining contributors." run={() => api('/api/agents/health-report', { method: 'POST', body: { owner, repo } })} />
+      </div>
+    </div>
+    <div className="panel">
+      <div className="panel-heading">
+        <div><p className="eyebrow">Issue-level</p><h2>Triage agents</h2></div>
+        <span className="count-label">Analyze a single open issue</span>
+      </div>
+      <label className="agent-issue-picker">
+        <span>Issue</span>
+        <select value={issueNumber} onChange={(event) => setIssueNumber(Number(event.target.value))}>
+          {openIssues.map((issue) => <option key={issue.id} value={issue.number}>#{issue.number} · {issue.title}</option>)}
+        </select>
+      </label>
+      {!openIssues.length && <p className="detail-muted">No open issues to analyze.</p>}
+      <div className="agent-grid">
+        <AgentRunner label="Duplicate check" hint="Finds existing issues that this one duplicates." disabled={!issueNumber} run={() => api('/api/agents/duplicate-check', { method: 'POST', body: { owner, repo, issueNumber } })} />
+        <AgentRunner label="Missing info" hint="Lists missing details that block triage." disabled={!issueNumber} run={() => api('/api/agents/missing-info', { method: 'POST', body: { owner, repo, issueNumber } })} />
+        <AgentRunner label="Sensitivity check" hint="Flags sensitive or security-related content." disabled={!issueNumber} run={() => api('/api/agents/sensitivity-check', { method: 'POST', body: { owner, repo, issueNumber } })} />
+        <AgentRunner label="Sentiment analysis" hint="Reads the tone of issue and pull request discussions." disabled={!issueNumber} run={() => api('/api/agents/sentiment-analysis', { method: 'POST', body: { owner, repo, issueNumber } })} />
+      </div>
+    </div>
+  </div>
+}
+
 function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
   const { repo, issues, pulls, commits, contributors, codeFrequency, codeFrequencyPending } = details
   const openIssues = issues.filter((issue) => !issue.pull_request && issue.state === 'open')
@@ -89,6 +177,7 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
       {activeTab === 'Commits' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Repository history</p><h2>Recent commits</h2></div><span className="count-label">Latest 30</span></div>{commits.map((commit) => <CommitRow commit={commit} owner={repo.owner.login} repo={repo.name} key={commit.sha} />)}{!commits.length && <EmptyState>No commits found.</EmptyState>}</div>}
       {activeTab === 'Contributors' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">People behind the code</p><h2>Contributors</h2></div><span className="count-label">{contributors.length} people</span></div>{contributors.map((contributor) => <ContributorRow contributor={contributor} key={contributor.id} />)}{!contributors.length && <EmptyState>No contributor data found.</EmptyState>}</div>}
       {activeTab === 'Code changes' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Repository activity</p><h2>Code changes</h2></div><span className="count-label">Weekly view</span></div><CodeChanges values={codeFrequency} pending={codeFrequencyPending} /></div>}
+      {activeTab === 'AI Agents' && <AgentsPanel owner={repo.owner.login} repo={repo.name} issues={issues} />}
     </section>
   </div>
 }

@@ -8,8 +8,11 @@ from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field
 import requests
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (shared backend .env, then optional local .env)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BACKEND_DIR = os.path.dirname(os.path.dirname(BASE_DIR))
+load_dotenv(os.path.join(BACKEND_DIR, ".env"))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 GITHUB_API = "https://api.github.com"
 PRECEDENT_STOPWORDS = set("a an the to of for and or in on with about from at by vs replace change use using make made this that refactor into instead config configuration loading loader".split())
