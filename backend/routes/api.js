@@ -38,8 +38,16 @@ router.get("/repos", async (req, res) => {
     let page = 1;
 
     while (true) {
+      const params = new URLSearchParams({
+        visibility: "all",
+        type: "all",
+        affiliation: "owner,collaborator,organization_member",
+        per_page: "100",
+        page: String(page),
+        sort: "updated",
+      });
       const response = await fetch(
-        `${GITHUB_API}/user/repos?visibility=all&affiliation=owner,collaborator,organization_member&per_page=100&page=${page}&sort=updated`,
+        `${GITHUB_API}/user/repos?${params}`,
         { headers: githubHeaders(req.session.githubToken) }
       );
 
