@@ -1224,6 +1224,7 @@ function RepositoryOverviewDashboard({
               </div>
             </article>
           </section>
+          <RepositoryChat owner={repo.owner.login} repo={repo.name} />
         </main>
       </div>
       {selectedIssue && (
