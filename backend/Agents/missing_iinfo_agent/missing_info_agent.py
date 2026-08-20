@@ -28,6 +28,7 @@ COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 if COMMON_DIR not in sys.path:
     sys.path.insert(0, COMMON_DIR)
 import memory_store  # noqa: E402  (shared persistent Chroma memory)
+import postgres_store  # noqa: E402  (optional Postgres run history)
 
 
 GITHUB_API = "https://api.github.com"
@@ -92,12 +93,35 @@ TEMPLATE_PATHS = (
     "CONTRIBUTING.md",
 )
 
+# Field keys the LLM is allowed to report. Everything it returns is validated
+# against this set, so output stays stable and never invents new categories.
+ALLOWED_FIELD_KEYS = (
+    "os", "version", "reproduction_steps", "expected_actual",
+    "logs", "error_message", "use_case", "expected_behavior", "context",
+)
+
 
 class IssueAssessment(BaseModel):
     """Small structured response produced by the model."""
 
     issue_type: str = Field(description="One of: bug, feature, question, other")
     confidence: float = Field(ge=0, le=1)
+
+
+class FieldAssessment(BaseModel):
+    """Structured field analysis produced by the model for one issue."""
+
+    required_fields: List[str] = Field(
+        description=f"Field keys the report should contain, from this set only: {', '.join(ALLOWED_FIELD_KEYS)}"
+    )
+    present_fields: List[str] = Field(
+        description=f"Required field keys that ARE covered in the issue text, from this set only: {', '.join(ALLOWED_FIELD_KEYS)}"
+    )
+    missing_details: List[str] = Field(
+        description="Short concrete phrases describing exactly what is missing from the actual issue text, "
+        "e.g. 'OS version not mentioned', 'No reproduction steps', 'Error logs not attached'. "
+        "Base every item strictly on the issue text and template; never invent missing items."
+    )
 
 
 class AgentState(TypedDict, total=False):
@@ -110,6 +134,7 @@ class AgentState(TypedDict, total=False):
     required_fields: List[str]
     present_fields: List[str]
     missing_fields: List[str]
+    missing_details: List[str]
     draft_comment: str
     action: str
     error: str
@@ -207,47 +232,151 @@ def classify_issue(state: AgentState) -> AgentState:
     return {"issue_type": issue_type}
 
 
+def _memory_context(state: AgentState) -> str:
+    """Similar past issues from the shared Chroma memory, as prompt context."""
+    try:
+        embedder = memory_store.build_embedder()
+        issue = state["issue"]
+        query_text = f"{issue.get('title', '')}\n{issue.get('body') or ''}"
+        hits = memory_store.retrieve(
+            state.get("owner", ""), state.get("repo", ""), embedder.embed_query(query_text), k=3,
+            where={"kind": "issue"},
+        )
+        lines = []
+        for hit in hits:
+            meta = hit.get("metadata") or {}
+            missing = [f for f in (meta.get("missing_fields") or "").split(",") if f]
+            lines.append(
+                f"- #{meta.get('number', '?')} ({meta.get('issue_type', '?')}) "
+                f"{meta.get('title', '')[:80]!r} — was missing: {', '.join(missing) or 'nothing'}"
+            )
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+def _history_context(state: AgentState) -> str:
+    """Recent analyses of this repo from Postgres, as prompt context."""
+    try:
+        rows = postgres_store.recent_analyses(state.get("owner", ""), state.get("repo", ""), limit=5)
+        lines = []
+        for row in rows:
+            details = row.get("missing_details") or []
+            lines.append(
+                f"- #{row.get('issue_number')} ({row.get('issue_type', '?')}) "
+                f"{row.get('title', '')[:80]!r} — missing: {'; '.join(details) or 'nothing'} → {row.get('action', '')}"
+            )
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+def _analyze_with_llm(state: AgentState, defaults: List[str]) -> Optional[Dict[str, Any]]:
+    """LLM analysis grounded in the actual issue text, the repo template, and
+    both memory stores. Returns None (→ deterministic fallback) on any failure
+    or if the model output is not usable — never fabricates."""
+    model_key = os.getenv("NVIDIA_API_KEY")
+    if not model_key:
+        return None
+    try:
+        issue = state["issue"]
+        title = issue.get("title", "")
+        body = issue.get("body") or ""
+        text = f"# {title}\n\n{body}"
+        guidance = (state.get("guidance") or "")[:2000]
+        client = ChatNVIDIA(
+            model=os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"),
+            api_key=model_key,
+            temperature=0,
+            max_completion_tokens=512,
+        ).with_structured_output(FieldAssessment)
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You assess whether a GitHub issue contains enough actionable information "
+                    "to triage it. Allowed field keys: " + ", ".join(ALLOWED_FIELD_KEYS) + ".\n"
+                    "- required_fields: keys the report should contain for its type "
+                    "(bug: os, version, reproduction_steps, expected_actual, plus logs/error_message if relevant; "
+                    "feature: use_case, expected_behavior; question/other: context).\n"
+                    "- present_fields: required keys that ARE actually covered in the issue text.\n"
+                    "- missing_details: short concrete phrases for what is genuinely absent from the "
+                    "ACTUAL issue text, e.g. 'OS version not mentioned', 'No reproduction steps', "
+                    "'Error logs not attached'. Base everything strictly on the provided issue text and "
+                    "template. Never ask for something the reporter already provided.\n"
+                    "Reply with JSON only.",
+                ),
+                (
+                    "human",
+                    "Repo issue template / CONTRIBUTING guidance (may be empty):\n{guidance}\n\n"
+                    "Similar past issues in this repo (Chroma memory):\n{memory}\n\n"
+                    "Recent analyses of this repo (Postgres history):\n{history}\n\n"
+                    "Issue to assess:\n{issue_text}",
+                ),
+            ]
+        )
+        assessment = (prompt | client).invoke(
+            {
+                "guidance": guidance or "(no template found)",
+                "memory": _memory_context(state) or "(none)",
+                "history": _history_context(state) or "(none)",
+                "issue_text": text,
+            }
+        )
+        allowed = set(ALLOWED_FIELD_KEYS)
+        required = [f for f in assessment.required_fields if f in allowed] or defaults
+        present = [f for f in assessment.present_fields if f in allowed and f in required]
+        details = [d.strip() for d in assessment.missing_details if d and d.strip()]
+        return {"required_fields": required, "present_fields": present, "missing_details": details}
+    except Exception:
+        return None
+
+
 def find_required_fields(state: AgentState) -> AgentState:
     issue_type = state.get("issue_type", "other")
-    required = list(REQUIRED_BY_TYPE.get(issue_type, ["context"]))
-    guidance = (state.get("guidance") or "").lower()
-
-    # Prefer the repo's own template when it explicitly asks for fields.
-    patterns = GUIDANCE_PATTERNS.get(issue_type, {})
-    if patterns and guidance:
-        requested = [field for field in required if re.search(patterns[field], guidance)]
-        if requested:
-            required = requested
-
-    if issue_type == "bug" and not guidance:
-        # No repo template: learn from project memory — fields that similar past
-        # bug reports in this repo were missing.
-        try:
-            embedder = memory_store.build_embedder()
-            issue = state["issue"]
-            query_text = f"{issue.get('title', '')}\n{issue.get('body') or ''}"
-            hits = memory_store.retrieve(
-                state.get("owner", ""), state.get("repo", ""), embedder.embed_query(query_text), k=3,
-                where={"kind": "issue", "issue_type": "bug"},
-            )
-            remembered: List[str] = []
-            for hit in hits:
-                for field in (hit["metadata"].get("missing_fields") or "").split(","):
-                    field = field.strip()
-                    if field in FIELD_LABELS and field not in remembered:
-                        remembered.append(field)
-            if remembered:
-                required = remembered
-        except Exception:
-            pass
-
+    defaults = list(REQUIRED_BY_TYPE.get(issue_type, ["context"]))
     body = (state["issue"].get("body") or "").lower()
-    present = [field for field in required if re.search(FIELD_MARKERS[field], body)]
+
+    analysis = _analyze_with_llm(state, defaults)
+    if analysis is None:
+        # Deterministic fallback: template-aware defaults + section-header scan.
+        required = defaults
+        guidance = (state.get("guidance") or "").lower()
+        patterns = GUIDANCE_PATTERNS.get(issue_type, {})
+        if patterns and guidance:
+            requested = [field for field in required if re.search(patterns[field], guidance)]
+            if requested:
+                required = requested
+        present = [field for field in required if re.search(FIELD_MARKERS[field], body)]
+        missing_details = [
+            _detail_for(field) for field in required if field not in present
+        ]
+    else:
+        required = analysis["required_fields"]
+        present = analysis["present_fields"]
+        missing_details = analysis["missing_details"]
+
     return {
         "required_fields": required,
         "present_fields": present,
         "missing_fields": [field for field in required if field not in present],
+        "missing_details": missing_details,
     }
+
+
+def _detail_for(field: str) -> str:
+    labels = {
+        "os": "OS not mentioned",
+        "version": "App/package version not mentioned",
+        "reproduction_steps": "No reproduction steps",
+        "expected_actual": "Expected vs actual behavior not described",
+        "use_case": "Use case not described",
+        "expected_behavior": "Expected behavior not described",
+        "context": "No context given",
+        "logs": "Logs not attached",
+        "error_message": "Error message not included",
+    }
+    return labels.get(field, f"{field} not mentioned")
 
 
 def _draft_comment(issue_type: str, missing: List[str]) -> str:
@@ -263,15 +392,83 @@ def _draft_comment(issue_type: str, missing: List[str]) -> str:
     return intro + "\n\n" + "\n".join(points)
 
 
+def _draft_with_llm(state: AgentState, missing_details: List[str]) -> Optional[str]:
+    """Comment generated by the LLM, asking only for the items the analysis
+    found genuinely missing from this issue. None → deterministic fallback."""
+    model_key = os.getenv("NVIDIA_API_KEY")
+    if not model_key or not missing_details:
+        return None
+    try:
+        issue = state["issue"]
+        client = ChatNVIDIA(
+            model=os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"),
+            api_key=model_key,
+            temperature=0.3,
+            max_completion_tokens=300,
+        )
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "Write a short, polite GitHub comment requesting the missing information "
+                    "listed below. Only ask for the listed items. Reference the reporter's own "
+                    "details naturally (e.g. acknowledge what they did provide). 2-4 sentences, "
+                    "no markdown headers, no generic filler, no extra requests.",
+                ),
+                ("human", "Issue title: {title}\nIssue body:\n{body}\n\nMissing details:\n{missing}"),
+            ]
+        )
+        reply = (prompt | client).invoke(
+            {
+                "title": issue.get("title", ""),
+                "body": (issue.get("body") or "")[:1500],
+                "missing": "\n".join(f"- {d}" for d in missing_details),
+            }
+        )
+        text = (reply.content or "").strip()
+        return text or None
+    except Exception:
+        return None
+
+
 def draft_follow_up(state: AgentState) -> AgentState:
     issue_type = state.get("issue_type", "other")
     missing = state.get("missing_fields", [])
+    missing_details = state.get("missing_details", [])
     _remember(state)
 
     if not missing:
+        postgres_store.record_analysis(
+            state.get("owner", ""), state.get("repo", ""),
+            {
+                "issue_number": (state.get("issue") or {}).get("number", 0),
+                "issue_type": issue_type,
+                "title": (state.get("issue") or {}).get("title", ""),
+                "required_fields": state.get("required_fields", []),
+                "present_fields": state.get("present_fields", []),
+                "missing_fields": [],
+                "missing_details": [],
+                "draft_comment": "",
+                "action": "pass-through",
+            },
+        )
         return {"action": "pass-through", "draft_comment": ""}
 
-    comment = _draft_comment(issue_type, missing)
+    comment = _draft_with_llm(state, missing_details) or _draft_comment(issue_type, missing)
+    postgres_store.record_analysis(
+        state.get("owner", ""), state.get("repo", ""),
+        {
+            "issue_number": (state.get("issue") or {}).get("number", 0),
+            "issue_type": issue_type,
+            "title": (state.get("issue") or {}).get("title", ""),
+            "required_fields": state.get("required_fields", []),
+            "present_fields": state.get("present_fields", []),
+            "missing_fields": missing,
+            "missing_details": missing_details,
+            "draft_comment": comment,
+            "action": "needs-info",
+        },
+    )
     return {"action": "needs-info", "draft_comment": comment}
 
 
@@ -344,7 +541,8 @@ def main() -> None:
         {"owner": owner, "repo": repo, "issue_number": args.issue}
     )
     print(json.dumps({key: result.get(key) for key in (
-        "issue_type", "required_fields", "present_fields", "missing_fields", "action", "draft_comment"
+        "issue_type", "required_fields", "present_fields", "missing_fields",
+        "missing_details", "action", "draft_comment"
     )}, indent=2))
 
 
