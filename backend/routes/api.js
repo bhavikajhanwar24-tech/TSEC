@@ -12,6 +12,17 @@ function githubHeaders(token) {
   };
 }
 
+async function fetchCodeFrequency(url, headers) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await fetch(url, { headers });
+    if (response.status !== 202) {
+      return { data: response.ok ? await response.json() : [], pending: false };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return { data: [], pending: true };
+}
+
 function requireAuth(req, res, next) {
   if (!req.session.githubToken) {
     return res.status(401).json({ error: "Not authenticated" });
@@ -27,13 +38,20 @@ router.get("/repos", async (req, res) => {
     let page = 1;
 
     while (true) {
+      const params = new URLSearchParams({
+        per_page: "100",
+        page: String(page),
+        sort: "updated",
+      });
       const response = await fetch(
-        `${GITHUB_API}/user/repos?per_page=100&page=${page}&sort=updated`,
+        `${GITHUB_API}/user/repos?${params}`,
         { headers: githubHeaders(req.session.githubToken) }
       );
 
       if (!response.ok) {
-        return res.status(response.status).json({ error: "GitHub API error" });
+        const error = await response.json().catch(() => ({}));
+        console.error("GitHub repositories error:", error);
+        return res.status(response.status).json({ error: error.message || "GitHub API error" });
       }
 
       const data = await response.json();
@@ -46,6 +64,58 @@ router.get("/repos", async (req, res) => {
   } catch (err) {
     console.error("Failed to fetch repos:", err);
     res.status(500).json({ error: "Failed to fetch repos" });
+  }
+});
+
+router.get("/repos/:owner/:repo/details", async (req, res) => {
+  const { owner, repo } = req.params;
+  const headers = githubHeaders(req.session.githubToken);
+  const baseUrl = `${GITHUB_API}/repos/${owner}/${repo}`;
+
+  try {
+    const [repoResponse, issuesResponse, pullsResponse, commitsResponse, contributorsResponse, codeFrequency] = await Promise.all([
+      fetch(baseUrl, { headers }),
+      fetch(`${baseUrl}/issues?state=all&per_page=30`, { headers }),
+      fetch(`${baseUrl}/pulls?state=all&per_page=30`, { headers }),
+      fetch(`${baseUrl}/commits?per_page=30`, { headers }),
+      fetch(`${baseUrl}/contributors?per_page=30`, { headers }),
+      fetchCodeFrequency(`${baseUrl}/stats/code_frequency`, headers),
+    ]);
+
+    if (!repoResponse.ok) return res.status(repoResponse.status).json({ error: "Repo not found" });
+
+    const [repoData, issues, pulls, commits, contributors] = await Promise.all(
+      [repoResponse, issuesResponse, pullsResponse, commitsResponse, contributorsResponse].map((response) => response.json())
+    );
+
+    res.json({
+      repo: repoData,
+      issues: Array.isArray(issues) ? issues : [],
+      pulls: Array.isArray(pulls) ? pulls : [],
+      commits: Array.isArray(commits) ? commits : [],
+      contributors: Array.isArray(contributors) ? contributors : [],
+      codeFrequency: Array.isArray(codeFrequency.data) ? codeFrequency.data : [],
+      codeFrequencyPending: codeFrequency.pending,
+    });
+  } catch (err) {
+    console.error("Failed to fetch repository details:", err);
+    res.status(500).json({ error: "Failed to fetch repository details" });
+  }
+});
+
+router.get("/repos/:owner/:repo/commits/:sha", async (req, res) => {
+  const { owner, repo, sha } = req.params;
+
+  try {
+    const response = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/commits/${sha}`, {
+      headers: githubHeaders(req.session.githubToken),
+    });
+    const data = await response.json();
+    if (!response.ok) return res.status(response.status).json({ error: data.message || "Failed to fetch commit changes" });
+    res.json(data);
+  } catch (err) {
+    console.error("Failed to fetch commit changes:", err);
+    res.status(500).json({ error: "Failed to fetch commit changes" });
   }
 });
 

@@ -33,23 +33,43 @@ function IssueRow({ item, pull = false }) {
   return <article className="activity-row"><span className={`state-dot ${item.state === 'open' ? 'open' : 'closed'}`}>{pull ? '↗' : '#'}</span><div><h3>{item.title}</h3><p>#{item.number} opened by {item.user?.login || 'unknown'} · {formatDate(item.created_at)}</p></div><span className="row-state">{item.state}</span></article>
 }
 
-function CommitRow({ commit }) {
-  return <article className="activity-row"><Avatar src={commit.author?.avatar_url || commit.committer?.avatar_url} /><div><h3>{commit.commit.message.split('\n')[0]}</h3><p>{commit.author?.login || commit.commit.author?.name || 'Unknown author'} · {formatDate(commit.commit.author?.date)}</p></div><code>{commit.sha.slice(0, 7)}</code></article>
+function CommitRow({ commit, owner, repo }) {
+  const [expanded, setExpanded] = useState(false)
+  const [details, setDetails] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function toggleCommit() {
+    setExpanded(!expanded)
+    if (!details && !loading) {
+      setLoading(true)
+      try {
+        setDetails(await api(`/api/repos/${owner}/${repo}/commits/${commit.sha}`))
+      } catch (requestError) {
+        setError(requestError.message)
+      } finally {
+        setLoading(false)
+      }
+    }
+  }
+
+  return <div className="commit-block"><button className="activity-row commit-button" type="button" onClick={toggleCommit}><Avatar src={commit.author?.avatar_url || commit.committer?.avatar_url} /><div><h3>{commit.commit.message.split('\n')[0]}</h3><p>{commit.author?.login || commit.commit.author?.name || 'Unknown author'} · {formatDate(commit.commit.author?.date)}</p></div><code>{commit.sha.slice(0, 7)}</code><span className="commit-chevron">{expanded ? '⌃' : '⌄'}</span></button>{expanded && <div className="commit-details">{loading && <p className="detail-muted">Loading changed code...</p>}{error && <p className="detail-error">{error}</p>}{details && <>{<div className="change-summary"><span className="additions-text">+{details.stats?.additions || 0}</span><span className="deletions-text">-{details.stats?.deletions || 0}</span><span>{details.files?.length || 0} files changed</span></div>}{details.files?.map((file) => <div className="changed-file" key={file.filename}><div className="changed-file-heading"><strong>{file.filename}</strong><span>{file.status} · +{file.additions} -{file.deletions}</span></div><pre>{file.patch || 'No patch available for this file.'}</pre></div>)}</>}</div>}</div>
 }
 
 function ContributorRow({ contributor }) {
   return <article className="contributor-row"><Avatar src={contributor.avatar_url} alt={contributor.login} /><div><h3>{contributor.login}</h3><p>{contributor.contributions.toLocaleString()} contributions</p></div><div className="contribution-bar"><span style={{ width: `${Math.min(100, contributor.contributions / 2)}%` }} /></div></article>
 }
 
-function CodeChanges({ values }) {
+function CodeChanges({ values, pending }) {
   const points = values.slice(-20)
   const max = Math.max(...points.map((point) => Math.max(point[1], point[2])), 1)
+  if (pending) return <EmptyState>GitHub is still preparing code frequency data. Check again shortly.</EmptyState>
   if (!points.length) return <EmptyState>No code frequency data available yet.</EmptyState>
   return <div className="chart"><div className="chart-bars">{points.map((point) => <div className="bar-group" key={point[0]} title={`${point[1]} additions, ${Math.abs(point[2])} deletions`}><span className="bar additions" style={{ height: `${(point[1] / max) * 100}%` }} /><span className="bar deletions" style={{ height: `${(Math.abs(point[2]) / max) * 100}%` }} /></div>)}</div><div className="chart-legend"><span><i className="legend-additions" /> Additions</span><span><i className="legend-deletions" /> Deletions</span></div></div>
 }
 
 function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
-  const { repo, issues, pulls, commits, contributors, codeFrequency } = details
+  const { repo, issues, pulls, commits, contributors, codeFrequency, codeFrequencyPending } = details
   const openIssues = issues.filter((issue) => !issue.pull_request && issue.state === 'open')
   const openPulls = pulls.filter((pull) => pull.state === 'open')
   const languages = Object.keys(repo.language ? { [repo.language]: true } : {})
@@ -66,9 +86,9 @@ function RepositoryDetail({ details, activeTab, setActiveTab, onBack }) {
       {activeTab === 'Overview' && <div className="overview-grid"><div className="panel"><p className="eyebrow">About this repository</p><h2>Project snapshot</h2><dl className="details-list"><div><dt>Default branch</dt><dd>{repo.default_branch}</dd></div><div><dt>License</dt><dd>{repo.license?.name || 'Not specified'}</dd></div><div><dt>Created</dt><dd>{formatDate(repo.created_at)}</dd></div><div><dt>Last updated</dt><dd>{formatDate(repo.updated_at)}</dd></div></dl></div><div className="panel"><p className="eyebrow">Project signals</p><h2>At a glance</h2><div className="signal-list"><div><span>Primary language</span><strong>{languages[0] || 'Not specified'}</strong></div><div><span>Repository size</span><strong>{Math.round(repo.size / 1024)} MB</strong></div><div><span>Visibility</span><strong>{repo.private ? 'Private' : 'Public'}</strong></div></div></div></div>}
       {activeTab === 'Issues' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Work tracking</p><h2>Issues</h2></div><span className="count-label">{issues.length} total</span></div>{issues.filter((issue) => !issue.pull_request).map((issue) => <IssueRow item={issue} key={issue.id} />)}{!issues.filter((issue) => !issue.pull_request).length && <EmptyState>No issues found.</EmptyState>}</div>}
       {activeTab === 'Pull requests' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Code review</p><h2>Pull requests</h2></div><span className="count-label">{openPulls.length} open</span></div>{pulls.map((pull) => <IssueRow item={pull} pull key={pull.id} />)}{!pulls.length && <EmptyState>No pull requests found.</EmptyState>}</div>}
-      {activeTab === 'Commits' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Repository history</p><h2>Recent commits</h2></div><span className="count-label">Latest 30</span></div>{commits.map((commit) => <CommitRow commit={commit} key={commit.sha} />)}{!commits.length && <EmptyState>No commits found.</EmptyState>}</div>}
+      {activeTab === 'Commits' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Repository history</p><h2>Recent commits</h2></div><span className="count-label">Latest 30</span></div>{commits.map((commit) => <CommitRow commit={commit} owner={repo.owner.login} repo={repo.name} key={commit.sha} />)}{!commits.length && <EmptyState>No commits found.</EmptyState>}</div>}
       {activeTab === 'Contributors' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">People behind the code</p><h2>Contributors</h2></div><span className="count-label">{contributors.length} people</span></div>{contributors.map((contributor) => <ContributorRow contributor={contributor} key={contributor.id} />)}{!contributors.length && <EmptyState>No contributor data found.</EmptyState>}</div>}
-      {activeTab === 'Code changes' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Repository activity</p><h2>Code changes</h2></div><span className="count-label">Weekly view</span></div><CodeChanges values={codeFrequency} /></div>}
+      {activeTab === 'Code changes' && <div className="panel"><div className="panel-heading"><div><p className="eyebrow">Repository activity</p><h2>Code changes</h2></div><span className="count-label">Weekly view</span></div><CodeChanges values={codeFrequency} pending={codeFrequencyPending} /></div>}
     </section>
   </div>
 }
