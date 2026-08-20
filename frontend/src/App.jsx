@@ -2517,7 +2517,7 @@ function RepositoryOverviewDashboard({
       workflowStatuses[issue.number] !== "complete",
   );
   const escalationIssues = issues.filter(
-    (issue) => escalationDecisions[issue.number]?.needsAttention,
+    (issue) => Boolean(escalationDecisions[issue.number]),
   );
   const resolvedIssues = issues.filter(
     (issue) =>
@@ -2832,7 +2832,7 @@ function RepositoryTabDashboard({
   const openPulls = pulls.filter((pull) => pull.state === "open");
   const escalationIssues = issues.filter(
     (issue) =>
-      !issue.pull_request && escalationDecisions[issue.number]?.needsAttention,
+      !issue.pull_request && Boolean(escalationDecisions[issue.number]),
   );
   const filteredEscalationIssues = escalationIssues.filter((issue) => {
     const decision = escalationDecisions[issue.number] || {};
@@ -2843,8 +2843,8 @@ function RepositoryTabDashboard({
   });
   const highPriorityIssues = [...filteredEscalationIssues].sort(
     (first, second) =>
-      Number(escalationDecisions[second.number]?.aggregateConfidence || 0) -
-      Number(escalationDecisions[first.number]?.aggregateConfidence || 0),
+      Number(escalationDecisions[second.number]?.urgency || 0) -
+      Number(escalationDecisions[first.number]?.urgency || 0),
   );
   const content = {
     Health: (
@@ -2884,7 +2884,7 @@ function RepositoryTabDashboard({
         <div className="panel-heading">
           <div>
             <p className="eyebrow">High priority</p>
-            <h2>Needs Your Attention</h2>
+            <h2>Escalation outcomes</h2>
           </div>
           <span className="count-label">{highPriorityIssues.length}</span>
         </div>
@@ -2910,6 +2910,7 @@ function RepositoryTabDashboard({
                     <strong>
                       Urgency {Number(decision.urgency || 0)}/100 · {Math.round(Number(decision.aggregateConfidence || 0) * 100)}% confidence
                     </strong>
+                    <span>{decision.needsAttention ? "Needs maintainer attention" : "Auto-handled"}</span>
                     {decision.isDuplicateHotspot && <span className="hotspot-badge">Hotspot · {decision.duplicateHotspotCount}</span>}
                   </div>
                 </div>

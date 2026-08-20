@@ -13,7 +13,7 @@ router.get("/:owner/:repo/escalations", async (req, res) => {
   if (!req.session?.githubToken) return res.status(401).json({ error: "Not authenticated" });
   try {
     const decisions = await EscalationDecision.findAll({
-      where: { needsAttention: true },
+      where: {},
       include: [{ model: require("../models").Issue, as: "issue", where: { repoFullName: `${req.params.owner}/${req.params.repo}` }, include: [{ association: "agentRuns" }, { association: "timelines" }] }],
       order: [["createdAt", "DESC"]],
     });
@@ -28,9 +28,10 @@ router.get("/:issueId/escalation", async (req, res) => {
   if (!req.session?.githubToken) return res.status(401).json({ error: "Not authenticated" });
   try {
     const { Issue } = require("../models");
+    const issueInclude = [{ association: "agentRuns" }, { association: "timelines" }];
     const issue = isUuid(req.params.issueId)
-      ? await Issue.findOne({ where: { id: req.params.issueId } })
-      : await Issue.findOne({ where: { githubIssueId: String(req.params.issueId) } });
+      ? await Issue.findOne({ where: { id: req.params.issueId }, include: issueInclude })
+      : await Issue.findOne({ where: { githubIssueId: String(req.params.issueId) }, include: issueInclude });
     const resolvedIssueId = issue?.id || req.params.issueId;
     if (!issue) return res.status(404).json({ error: "Issue not found" });
     const decision = await EscalationDecision.findOne({ where: { issueId: resolvedIssueId } });

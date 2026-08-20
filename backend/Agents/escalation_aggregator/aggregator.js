@@ -59,10 +59,11 @@ async function notifyForDecision(issue, agentRuns, decision) {
 
 async function evaluateIssueForEscalation(issueId) {
   const agentRuns = await AgentRun.findAll({ where: { issueId } });
-  const present = new Set(agentRuns.map(normalizeCategory));
+  const completedRuns = agentRuns.filter((run) => run.status === "complete");
+  const present = new Set(completedRuns.map(normalizeCategory));
   const duplicateFailed = agentRuns.some((run) => normalizeCategory(run) === "duplicate" && run.status === "failed");
   if (!duplicateFailed && (present.size < REQUIRED_CATEGORIES.size || [...REQUIRED_CATEGORIES].some((category) => !present.has(category)))) {
-    return pendingDecision(agentRuns);
+    return pendingDecision(completedRuns);
   }
 
   const issue = agentRuns[0] ? await agentRuns[0].getIssue() : null;
@@ -75,7 +76,7 @@ async function evaluateIssueForEscalation(issueId) {
     return run.issue?.state === "open" && (output.is_direct_duplicate || output.suggested_action === "link_open_issue");
   }).length;
   const isDuplicateHotspot = duplicateHotspotCount >= 3;
-  const decision = scoreRuns(agentRuns, { duplicateHotspotCount, isDuplicateHotspot });
+  const decision = scoreRuns(completedRuns.length ? completedRuns : agentRuns, { duplicateHotspotCount, isDuplicateHotspot });
   const existing = await EscalationDecision.findOne({ where: { issueId } });
   if (existing) return { pending: false, ...existing.toJSON() };
   const notificationSent = issue ? await notifyForDecision(issue, agentRuns, decision) : false;
