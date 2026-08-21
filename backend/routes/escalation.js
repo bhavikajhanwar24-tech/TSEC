@@ -14,6 +14,35 @@ function githubHeaders(token) {
   return { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "RepoGuardian", "Content-Type": "application/json" };
 }
 
+function linkedIssueNumbers(text) {
+  const matches = String(text || "").matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi);
+  return [...new Set([...matches].map((match) => Number(match[1])))];
+}
+
+async function closeLinkedIssues(owner, repo, pullRequest, token) {
+  const numbers = linkedIssueNumbers(`${pullRequest.title || ""}\n${pullRequest.body || ""}`);
+  const headers = githubHeaders(token);
+  const results = [];
+  for (const number of numbers) {
+    try {
+      await fetch(`${GITHUB_API}/repos/${owner}/${repo}/issues/${number}/comments`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ body: `This issue was resolved by pull request #${pullRequest.number}. The pull request was accepted and merged.` }),
+      });
+    } catch (error) {
+      console.error(`Linked issue #${number} resolution comment failed:`, error.message);
+    }
+    const response = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/issues/${number}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ state: "closed", state_reason: "completed" }),
+    });
+    results.push({ number, closed: response.ok });
+  }
+  return results;
+}
+
 function suggestionScore(login, issue, runs, contributor) {
   const text = `${issue.title || ""} ${issue.body || ""}`.toLowerCase();
   const evidence = JSON.stringify(runs.map((run) => run.output || {})).toLowerCase();
@@ -63,11 +92,27 @@ router.post("/:owner/:repo/moderation/:number", async (req, res) => {
   const assignee = String(req.body?.assignee || "").trim();
   const reopen = req.body?.reopen === true;
   const undo = req.body?.undo === true;
-  if (!assignee && !reopen && !undo) return res.status(400).json({ error: "Choose a collaborator, request reopen, or undo the assignment" });
+  const accept = req.body?.accept === true;
+  if (!assignee && !reopen && !undo && !accept) return res.status(400).json({ error: "Choose a collaborator, request reopen, undo the assignment, or accept the PR" });
   try {
+    const headers = githubHeaders(req.session.githubToken);
+    if (accept) {
+      const pullResponse = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/pulls/${number}`, { headers });
+      const pullRequest = await pullResponse.json();
+      if (!pullResponse.ok) return res.status(pullResponse.status).json({ error: pullRequest.message || "Pull request not found" });
+      const mergeResponse = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/pulls/${number}/merge`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ merge_method: req.body?.mergeMethod || "squash" }),
+      });
+      const mergeResult = await mergeResponse.json();
+      if (!mergeResponse.ok || !mergeResult.merged) return res.status(mergeResponse.status || 409).json({ error: mergeResult.message || "Pull request could not be merged" });
+      const closedIssues = await closeLinkedIssues(owner, repo, pullRequest, req.session.githubToken);
+      return res.json({ accepted: true, merged: true, sha: mergeResult.sha, closedIssues });
+    }
     const response = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/issues/${number}`, {
       method: "PATCH",
-      headers: githubHeaders(req.session.githubToken),
+      headers,
       body: JSON.stringify({ ...(assignee ? { assignees: [assignee] } : {}), ...(undo ? { assignees: [], state: "open", state_reason: "reopened" } : {}), ...(reopen ? { state: "open", state_reason: "reopened" } : {}) }),
     });
     const result = await response.json();

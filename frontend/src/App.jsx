@@ -2716,7 +2716,7 @@ function ModeratorPanel({ context, onAction }) {
     setMessage("");
     try {
       await onAction(payload);
-      setMessage(`Assigned to @${payload.assignee}.`);
+      setMessage(payload.accept ? "Pull request accepted and merged; linked issues were updated." : `Assigned to @${payload.assignee}.`);
     } catch (error) {
       setMessage(error.message);
     } finally {
@@ -2724,6 +2724,7 @@ function ModeratorPanel({ context, onAction }) {
     }
   }
   const reporter = context.issue?.user?.login;
+  const isPullRequest = Boolean(context.issue?.pull_request);
   return (
     <section className="moderator-panel">
       <div className="escalation-evidence-heading">
@@ -2734,6 +2735,16 @@ function ModeratorPanel({ context, onAction }) {
         <span className="count-label">GitHub source of truth</span>
       </div>
       <div className="moderator-actions">
+        {isPullRequest && (
+          <button
+            type="button"
+            className="primary-button"
+            disabled={busy}
+            onClick={() => act({ accept: true })}
+          >
+            Accept and merge PR
+          </button>
+        )}
         <select
           value={assignee}
           onChange={(event) => setAssignee(event.target.value)}

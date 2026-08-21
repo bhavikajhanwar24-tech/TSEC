@@ -43,6 +43,33 @@ function isConfirmedDuplicate(result) {
   );
 }
 
+function linkedIssueNumbers(text) {
+  const matches = String(text || "").matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi);
+  return [...new Set([...matches].map((match) => Number(match[1])))];
+}
+
+async function closeLinkedIssues(owner, repo, pullRequest, token) {
+  const numbers = linkedIssueNumbers(`${pullRequest.title || ""}\n${pullRequest.body || ""}`);
+  for (const number of numbers) {
+    try {
+      await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}/comments`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json", "User-Agent": "RepoGuardian" },
+        body: JSON.stringify({ body: `This issue was resolved by merged pull request #${pullRequest.number}.` }),
+      });
+    } catch (error) {
+      console.error(`Linked issue #${number} resolution comment failed:`, error.message);
+    }
+    const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json", "User-Agent": "RepoGuardian" },
+      body: JSON.stringify({ state: "closed", state_reason: "completed" }),
+    });
+    if (!response.ok) console.error(`Linked issue #${number} could not be closed after PR merge: ${response.status}`);
+  }
+  return numbers;
+}
+
 async function getPersistedAnalysis(owner, repo, number) {
   try {
     const { Issue } = require("../models");
@@ -336,7 +363,7 @@ router.post(["/github", "/"], async (req, res) => {
   }
 
   const issueEvent = event === "issues" && ["opened", "reopened"].includes(req.body.action);
-  const pullRequestEvent = event === "pull_request" && ["opened", "reopened"].includes(req.body.action);
+  const pullRequestEvent = event === "pull_request" && ["opened", "reopened", "closed"].includes(req.body.action);
   const prSynchronizeEvent = event === "pull_request" && req.body.action === "synchronize";
   const reviewEvent = event === "pull_request_review" && req.body.action === "submitted";
   const commentEvent = event === "issue_comment" && req.body.action === "created";
@@ -402,6 +429,10 @@ router.post(["/github", "/"], async (req, res) => {
   // Planner for CI + linked-issue context; agent pipelines stay issue-only.
   if (pullRequestEvent || prSynchronizeEvent || reviewEvent) {
     const pr = req.body.pull_request || {};
+    if (pullRequestEvent && req.body.action === "closed" && pr.merged) {
+      const closedIssues = await closeLinkedIssues(repository.owner.login, repository.name, pr, process.env.GITHUB_TOKEN);
+      return res.status(202).json({ accepted: true, processed: false, merged: true, linkedIssues: closedIssues });
+    }
     if (pr.number) {
       const prAsIssue = {
         number: pr.number,
