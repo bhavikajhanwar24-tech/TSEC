@@ -1,10 +1,11 @@
 const express = require("express");
-const { indexDocuments, searchDocuments } = require("../services/ragService");
+const { searchDocuments } = require("../services/ragService");
+const { indexRepository, getIndexingStatus } = require("../services/indexingService");
+const { ChatSession, ChatMessage } = require("../models");
 
 const router = express.Router();
 
 const GITHUB_API = "https://api.github.com";
-const chatCache = new Map();
 
 function githubHeaders(token) {
   return {
@@ -216,97 +217,206 @@ router.get("/repos/:owner/:repo/details", async (req, res) => {
 router.post("/repos/:owner/:repo/chat", async (req, res) => {
   const { owner, repo } = req.params;
   const question = String(req.body?.question || "").trim();
+  const sessionId = req.body?.sessionId;
+  const stream = req.body?.stream === true;
+  
   if (!question) return res.status(400).json({ error: "A question is required" });
-  if (question.length > 1200) return res.status(400).json({ error: "Question is too long" });
-  const cacheKey = `${owner}/${repo}:${question.toLowerCase()}`;
-  const cached = chatCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return res.json({ ...cached.value, cached: true });
-  chatCache.delete(cacheKey);
+  if (question.length > 2000) return res.status(400).json({ error: "Question is too long" });
 
   try {
-    const { Issue } = require("../models");
-    const storedIssuesPromise = Issue.findAll({
-      where: { repoFullName: `${owner}/${repo}` },
-      include: [{ association: "agentRuns" }, { association: "timelines" }],
-      order: [["updatedAt", "DESC"]],
-      limit: 80,
-    }).catch((error) => {
-      console.error("Repository chat database retrieval failed:", error.message);
-      return [];
-    });
-    const headers = githubHeaders(req.session.githubToken);
-    const [storedIssues, repository, githubIssues, githubCommits, githubContributors] = await Promise.all([
-      storedIssuesPromise,
-      fetch(`${GITHUB_API}/repos/${owner}/${repo}`, { headers })
-        .then((response) => response.ok ? response.json() : null)
-        .catch(() => null),
-      fetchOptionalList(`${GITHUB_API}/repos/${owner}/${repo}/issues?state=all&per_page=80`, headers),
-      fetchOptionalList(`${GITHUB_API}/repos/${owner}/${repo}/commits?per_page=50`, headers),
-      fetchOptionalList(`${GITHUB_API}/repos/${owner}/${repo}/contributors?per_page=50`, headers),
-    ]);
-
-    const documents = [];
-    if (repository) {
-      documents.push({
-        id: "repository-overview",
-        source: "Repository overview",
-        text: `Repository ${repository.full_name}: ${repository.description || "No description"}\nLanguage: ${repository.language || "Not specified"}\nDefault branch: ${repository.default_branch}\nVisibility: ${repository.private ? "private" : "public"}\nStars: ${repository.stargazers_count || 0}\nForks: ${repository.forks_count || 0}\nOpen issues: ${repository.open_issues_count || 0}\nCreated: ${repository.created_at}\nUpdated: ${repository.updated_at}\nLicense: ${repository.license?.name || "Not specified"}`,
-      });
+    let session;
+    if (sessionId) {
+      session = await ChatSession.findByPk(sessionId, { include: [{ model: ChatMessage, as: "messages", order: [["createdAt", "ASC"]], limit: 20 }] });
     }
-    storedIssues.forEach((issue) => {
-      const issueJson = issue.toJSON();
-      const kind = issueJson.isPullRequest ? "PR" : "Issue";
-      documents.push({
-        id: `stored-${issueJson.githubIssueId || issueJson.number}`,
-        source: `${kind} #${issueJson.number}`,
-        text: `${kind} #${issueJson.number}: ${issueJson.title}\n${issueJson.body || ""}\nState: ${issueJson.state}\nWorkflow: ${issueJson.workflowStatus} at step ${issueJson.workflowStep}\n${(issueJson.agentRuns || []).map((run) => `${run.agentName} (${run.status}): ${run.reasoning}\n${JSON.stringify(run.output || {})}`).join("\n")}\n${(issueJson.timelines || []).map((timeline) => `${timeline.actor}: ${timeline.body}`).join("\n")}`,
-      });
-    });
-    githubIssues.forEach((item) => {
-      documents.push({
-        id: `github-${item.id || item.number}`,
-        source: `${item.pull_request ? "PR" : "Issue"} #${item.number}`,
-        text: `${item.pull_request ? "PR" : "Issue"} #${item.number}: ${item.title}\n${item.body || ""}\nState: ${item.state}\nAuthor: ${item.user?.login || "unknown"}\nCreated: ${item.created_at || ""}\nUpdated: ${item.updated_at || ""}`,
-      });
-    });
-    githubCommits.forEach((commit) => {
-      documents.push({
-        id: `commit-${commit.sha}`,
-        source: `Commit ${commit.sha?.slice(0, 7) || "unknown"}`,
-        text: `Commit ${commit.sha || ""}: ${commit.commit?.message || ""}\nAuthor: ${commit.author?.login || commit.commit?.author?.name || "unknown"}\nDate: ${commit.commit?.author?.date || ""}\nURL: ${commit.html_url || ""}`,
-      });
-    });
-    githubContributors.forEach((contributor) => {
-      documents.push({
-        id: `contributor-${contributor.id || contributor.login}`,
-        source: `Contributor ${contributor.login || "unknown"}`,
-        text: `Contributor: ${contributor.login || "unknown"}\nContributions: ${contributor.contributions || 0}\nProfile: ${contributor.html_url || ""}`,
-      });
+    if (!session) {
+      session = await ChatSession.create({ owner, repo, githubUserId: req.session.githubUser?.login || req.session.githubUserId });
+    }
+
+    await ChatMessage.create({ sessionId: session.id, role: "user", content: question });
+
+    const status = getIndexingStatus(owner, repo);
+    if (status !== "complete") {
+      indexRepository(owner, repo, req.session.githubToken).catch(() => {});
+    }
+
+    const result = await searchDocuments(owner, repo, question, 10, { tier: "meta" });
+    const semantic = (result.hits || []).map((hit) => ({
+      id: hit.id,
+      source: hit.metadata?.source || `${hit.metadata?.kind || "Record"}${hit.metadata?.number ? ` #${hit.metadata.number}` : ""}`,
+      text: hit.text || "",
+      score: Number(hit.score || 0),
+    }));
+
+    const context = semantic.length
+      ? semantic.slice(0, 6).map((doc) => `SOURCE: ${doc.source}\n${doc.text.slice(0, 1200)}`).join("\n\n")
+      : "No indexed repository records found yet. Indexing may still be in progress.";
+
+    const history = session.messages?.slice(-10).map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`).join("\n") || "";
+
+    const apiKey = process.env.NVIDIA_API_KEY;
+    if (!apiKey) {
+      const fallback = semantic.length
+        ? `I found ${semantic.length} relevant records: ${semantic.map((d) => d.source).join(", ")}. (Configure NVIDIA_API_KEY for AI responses.)`
+        : "Repository not indexed yet. Please wait a moment and try again.";
+      const assistantMsg = await ChatMessage.create({ sessionId: session.id, role: "assistant", content: fallback });
+      return res.json({ answer: fallback, sources: semantic.map(({ source, score }) => ({ source, score })), sessionId: session.id });
+    }
+
+    const messages = [
+      { role: "system", content: `You are RepoGuardian, an AI assistant for GitHub repository analysis. You have access to indexed repository data (issues, PRs, commits, contributors, agent analyses).
+
+Guidelines:
+- Answer naturally and conversationally, like a knowledgeable colleague
+- Use the provided context to give specific, accurate answers with references
+- If context doesn't contain the answer, say so and suggest where to look (GitHub UI, specific files, etc.)
+- Cite sources inline like [Issue #123] or [PR #45] when making specific claims
+- Don't invent issue numbers, PRs, fixes, authors, dates, or status
+- Keep responses concise but complete
+- You can discuss code, architecture, history, team dynamics, and workflow patterns` },
+      { role: "user", content: `Conversation history:\n${history || "(none)"}\n\nRepository context:\n${context}\n\nQuestion: ${question}` },
+    ];
+
+    if (stream) {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Transfer-Encoding", "chunked");
+      res.setHeader("X-Session-Id", session.id);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+
+      try {
+        const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+          method: "POST",
+          signal: controller.signal,
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: process.env.NVIDIA_CHAT_MODEL || process.env.NVIDIA_MODEL || "nvidia/nemotron-3-ultra-550b-a55b",
+            temperature: 0.3,
+            max_tokens: 1500,
+            stream: true,
+            messages,
+          }),
+        });
+
+        if (!response.ok) throw new Error(`NVIDIA API error: ${response.status}`);
+
+        let fullAnswer = "";
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split("\n");
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              const data = line.slice(6).trim();
+              if (data === "[DONE]") continue;
+              try {
+                const parsed = JSON.parse(data);
+                const content = parsed.choices?.[0]?.delta?.content;
+                if (content) {
+                  fullAnswer += content;
+                  res.write(content);
+                }
+              } catch {}
+            }
+          }
+        }
+
+        await ChatMessage.create({ sessionId: session.id, role: "assistant", content: fullAnswer });
+        res.end();
+      } catch (error) {
+        console.error("Streaming error:", error.message);
+        if (!res.writableEnded) {
+          res.write("\n\n[Error: Failed to stream response]");
+          res.end();
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+      return;
+    }
+
+    const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: process.env.NVIDIA_CHAT_MODEL || process.env.NVIDIA_MODEL || "nvidia/nemotron-3-ultra-550b-a55b",
+        temperature: 0.3,
+        max_tokens: 1500,
+        messages,
+      }),
     });
 
-    const indexable = documents.map(({ id, source, text }) => ({ id, text, metadata: { kind: "repository", source } }));
-    let semantic = semanticDocuments((await searchDocuments(owner, repo, question, 8)).hits);
-    if (!semantic.length && indexable.length) {
-      await indexDocuments(owner, repo, indexable);
-      semantic = semanticDocuments((await searchDocuments(owner, repo, question, 8)).hits);
-    }
-    const keyword = rankDocuments(documents, question);
-    const combined = [...semantic, ...keyword].filter((document, index, all) => all.findIndex((item) => item.id === document.id) === index).slice(0, 12);
-    const context = combined.length
-      ? combined.slice(0, 8).map((document) => `SOURCE: ${document.source}\n${compact(document.text, 900)}`).join("\n\n")
-      : "No stored issue, pull request, or workflow records were found for this repository.";
-    const answer = await answerWithNvidia(question, context);
-    const fallback = combined.length
-      ? `I found ${combined.length} related repository record${combined.length === 1 ? "" : "s"}: ${combined.map((document) => document.source).join(", ")}. Review the matching records in the dashboard for the confirmed details.`
-      : "I could not find matching issue, pull request, or workflow history for that question.";
-    const value = { answer: answer || fallback, sources: combined.map(({ source, score }) => ({ source, score })) };
-    chatCache.set(cacheKey, { value, expiresAt: Date.now() + 60_000 });
-    if (chatCache.size > 200) chatCache.delete(chatCache.keys().next().value);
-    res.json(value);
+    if (!response.ok) throw new Error(`NVIDIA API error: ${response.status}`);
+
+    const data = await response.json();
+    const answer = data.choices?.[0]?.message?.content?.trim() || "No response generated.";
+    
+    await ChatMessage.create({ sessionId: session.id, role: "assistant", content: answer });
+
+    res.json({ answer, sources: semantic.map(({ source, score }) => ({ source, score })), sessionId: session.id });
   } catch (error) {
     console.error("Repository chat error:", error);
     res.status(500).json({ error: "Repository chat is temporarily unavailable" });
   }
+});
+
+router.get("/repos/:owner/:repo/chat/sessions", async (req, res) => {
+  try {
+    const sessions = await ChatSession.findAll({
+      where: { owner, repo, githubUserId: req.session.githubUser?.login || req.session.githubUserId },
+      order: [["updatedAt", "DESC"]],
+      limit: 20,
+      include: [{ model: ChatMessage, as: "messages", limit: 1, order: [["createdAt", "DESC"]] }],
+    });
+    res.json(sessions);
+  } catch (error) {
+    console.error("Chat sessions error:", error);
+    res.status(500).json({ error: "Failed to load chat sessions" });
+  }
+});
+
+router.get("/repos/:owner/:repo/chat/sessions/:sessionId", async (req, res) => {
+  try {
+    const session = await ChatSession.findOne({
+      where: { id: req.params.sessionId, owner, repo },
+      include: [{ model: ChatMessage, as: "messages", order: [["createdAt", "ASC"]] }],
+    });
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    res.json(session);
+  } catch (error) {
+    console.error("Chat session error:", error);
+    res.status(500).json({ error: "Failed to load chat session" });
+  }
+});
+
+router.delete("/repos/:owner/:repo/chat/sessions/:sessionId", async (req, res) => {
+  try {
+    const session = await ChatSession.findOne({ where: { id: req.params.sessionId, owner, repo } });
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    await session.destroy();
+    res.json({ deleted: true });
+  } catch (error) {
+    console.error("Chat session delete error:", error);
+    res.status(500).json({ error: "Failed to delete chat session" });
+  }
+});
+
+router.post("/repos/:owner/:repo/chat/index", async (req, res) => {
+  try {
+    const result = await indexRepository(req.params.owner, req.params.repo, req.session.githubToken);
+    res.json(result);
+  } catch (error) {
+    console.error("Manual index error:", error);
+    res.status(500).json({ error: "Failed to trigger indexing" });
+  }
+});
+
+router.get("/repos/:owner/:repo/chat/index/status", async (req, res) => {
+  res.json({ status: getIndexingStatus(req.params.owner, req.params.repo) });
 });
 
 router.get("/repos/:owner/:repo/commits/:sha", async (req, res) => {

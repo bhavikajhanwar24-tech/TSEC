@@ -442,112 +442,254 @@ function CodeChanges({ values, pending }) {
 function RepositoryChat({ owner, repo }) {
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [sessions, setSessions] = useState([]);
+  const [currentSessionId, setCurrentSessionId] = useState(null);
+  const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState("");
+  const [showSessions, setShowSessions] = useState(false);
+  const [indexingStatus, setIndexingStatus] = useState("unknown");
   const suggestions = [
     "Which issues are waiting for information?",
     "What problems were solved recently?",
     "Which PRs relate to security?",
+    "Show me recent architectural decisions",
+    "Who are the top contributors?",
+    "What's the current health status?",
   ];
+
+  async function loadSessions() {
+    try {
+      const data = await api(`/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/chat/sessions`);
+      setSessions(data);
+      if (data.length > 0 && !currentSessionId) {
+        loadSession(data[0].id);
+      }
+    } catch (err) {
+      console.error("Failed to load sessions:", err);
+    }
+  }
+
+  async function checkIndexingStatus() {
+    try {
+      const data = await api(`/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/chat/index/status`);
+      setIndexingStatus(data.status);
+      if (data.status !== "complete") {
+        setTimeout(checkIndexingStatus, 5000);
+      }
+} catch (_err) { // eslint-disable-line no-unused-vars
+      setIndexingStatus("unknown");
+    }
+  }
+
+// eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
+useEffect(() => {
+    loadSessions();
+    checkIndexingStatus();
+}, [owner, repo]);
+
+  async function loadSession(sessionId) {
+    try {
+      const data = await api(`/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/chat/sessions/${sessionId}`);
+      setCurrentSessionId(data.id);
+      setMessages(data.messages || []);
+      setShowSessions(false);
+    } catch (e) {
+      console.error("Failed to load session:", e);
+    }
+  }
+
+  async function newSession() {
+    setCurrentSessionId(null);
+    setMessages([]);
+    setShowSessions(false);
+  }
+
+  async function deleteSession(sessionId, _e) {
+    _e.stopPropagation();
+    try {
+      await api(`/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/chat/sessions/${sessionId}`, { method: "DELETE" });
+      setSessions((s) => s.filter((sess) => sess.id !== sessionId));
+      if (currentSessionId === sessionId) {
+        newSession();
+      }
+    } catch (err) {
+      setError(err.message);
+    }
+  }
 
   async function ask(event) {
     event.preventDefault();
     const value = question.trim();
-    if (!value || loading) return;
+    if (!value || streaming) return;
     setQuestion("");
     setError("");
-    setMessages((current) => [...current, { role: "user", text: value }]);
-    setLoading(true);
+
+    const userMsg = { role: "user", text: value, sources: [] };
+    setMessages((current) => [...current, userMsg]);
+    setStreaming(true);
+
     try {
-      const result = await api(
-        `/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/chat`,
-        { method: "POST", body: { question: value } },
-      );
-      setMessages((current) => [
-        ...current,
-        {
-          role: "assistant",
-          text: result.answer,
-          sources: result.sources || [],
-        },
-      ]);
+      const response = await fetch(`${API_BASE}/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ question: value, sessionId: currentSessionId, stream: true }),
+      });
+
+      if (!response.ok) throw new Error(`Request failed (${response.status})`);
+
+      const sessionId = response.headers.get("X-Session-Id");
+      if (sessionId && !currentSessionId) {
+        setCurrentSessionId(sessionId);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let assistantText = "";
+      let assistantIndex = messages.length;
+
+      setMessages((current) => [...current, { role: "assistant", text: "", sources: [], streaming: true }]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") continue;
+            try {
+              const parsed = JSON.parse(data);
+              const content = parsed.choices?.[0]?.delta?.content;
+              if (content) {
+                assistantText += content;
+                setMessages((current) => {
+                  const next = [...current];
+                  next[assistantIndex] = { ...next[assistantIndex], text: assistantText };
+                  return next;
+                });
+              }
+            } catch (_err) { // eslint-disable-line no-unused-vars
+            }
+          }
+        }
+      }
+
+      setMessages((current) => {
+        const next = [...current];
+        if (next[assistantIndex]) {
+          next[assistantIndex] = { ...next[assistantIndex], streaming: false };
+        }
+        return next;
+      });
+      loadSessions();
     } catch (requestError) {
       setError(requestError.message);
+      setMessages((current) => current.slice(0, -1));
     } finally {
-      setLoading(false);
+      setStreaming(false);
     }
+  }
+
+  function formatTime(date) {
+    return new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
   return (
     <section className="repo-chat panel">
-      <div className="chat-heading">
-        <div>
-          <p className="eyebrow">Repository memory</p>
-          <h2>Ask about this repository</h2>
-          <p>
-            Search issues, pull requests, workflow decisions, and solved
-            history.
-          </p>
+      <div className="chat-header">
+        <div className="chat-title-area">
+          <div className="chat-title-row">
+            <span className="chat-toggle" onClick={() => setShowSessions(!showSessions)}>
+              {showSessions ? "◀" : "▶"} History
+            </span>
+            <div>
+              <p className="eyebrow">Repository memory</p>
+              <h2>Ask about this repository</h2>
+            </div>
+          </div>
+          <div className="chat-status-row">
+            <span className={`indexing-badge ${indexingStatus}`}>
+              {indexingStatus === "complete" ? "✓ Indexed" : indexingStatus === "running" ? "⟳ Indexing..." : "○ Not indexed"}
+            </span>
+            <button className="new-chat-btn" onClick={newSession} title="New conversation">+</button>
+          </div>
         </div>
-        <span className="chat-status">RAG enabled</span>
       </div>
+
+      {showSessions && (
+        <div className="chat-sessions-sidebar">
+          {sessions.length === 0 ? (
+            <p className="no-sessions">No conversations yet</p>
+          ) : (
+            sessions.map((session) => (
+              <button
+                key={session.id}
+                className={`session-item ${currentSessionId === session.id ? "active" : ""}`}
+                onClick={() => loadSession(session.id)}
+              >
+                <span className="session-preview">
+                  {session.messages?.[0]?.content?.slice(0, 50) || "Empty conversation"}
+                </span>
+                <span className="session-time">{session.updatedAt ? formatTime(session.updatedAt) : ""}</span>
+                <button className="delete-session" onClick={(e) => deleteSession(session.id, e)} title="Delete">×</button>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+
       <div className="chat-suggestions">
         {suggestions.map((suggestion) => (
-          <button
-            type="button"
-            key={suggestion}
-            onClick={() => setQuestion(suggestion)}
-          >
+          <button type="button" key={suggestion} onClick={() => setQuestion(suggestion)}>
             {suggestion}
           </button>
         ))}
       </div>
+
       <div className="chat-transcript" aria-live="polite">
-        {!messages.length && (
+        {!messages.length && !currentSessionId && (
           <EmptyState>
-            Ask a repository question to see grounded history.
+            Ask a question to start a conversation. I'll search the repository's issues, PRs, commits, and agent analyses.
           </EmptyState>
         )}
         {messages.map((message, index) => (
           <div
-            className={`chat-message ${message.role}`}
             key={`${message.role}-${index}`}
+            className={`chat-message ${message.role} ${message.streaming ? "streaming" : ""}`}
           >
-            <span className="chat-role">
-              {message.role === "user" ? "You" : "RepoGuardian"}
-            </span>
-            <p>{message.text}</p>
+            <div className="message-header">
+              <span className="chat-role">{message.role === "user" ? "You" : "RepoGuardian"}</span>
+              {message.streaming && <span className="streaming-indicator">▊</span>}
+            </div>
+            <div className="message-content">
+              {message.text ? <p>{message.text}</p> : <p className="chat-loading">Thinking...</p>}
+            </div>
             {message.sources?.length > 0 && (
               <div className="chat-sources">
                 {message.sources.map((source) => (
-                  <span key={source.source}>{source.source}</span>
+                  <span key={source.source} title={source.source}>{source.source}</span>
                 ))}
               </div>
             )}
           </div>
         ))}
-        {loading && (
-          <div className="chat-message assistant">
-            <span className="chat-role">RepoGuardian</span>
-            <p className="chat-loading">Searching repository history...</p>
-          </div>
-        )}
       </div>
+
       {error && <p className="detail-error">{error}</p>}
+
       <form className="chat-form" onSubmit={ask}>
         <textarea
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
-          placeholder="Ask about issues, PRs, fixes, or workflow history..."
+          placeholder={streaming ? "Waiting for response..." : "Ask about issues, PRs, fixes, workflow history, contributors..."}
           rows="2"
-          maxLength="1200"
+          maxLength="2000"
+          disabled={streaming}
         />
-        <button
-          className="primary-button"
-          type="submit"
-          disabled={loading || !question.trim()}
-        >
-          {loading ? "Searching..." : "Ask"}
+        <button className="primary-button" type="submit" disabled={streaming || !question.trim()}>
+          {streaming ? "Streaming..." : "Ask"}
         </button>
       </form>
     </section>
