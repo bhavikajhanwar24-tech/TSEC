@@ -130,7 +130,7 @@ async function riskFromDb(token, sinceEpoch) {
   }
 }
 
-router.get("/trends", requireAuth, async (req, res) => {
+router.get(["/", "/trends"], requireAuth, async (req, res) => {
   const { days, since, until } = parseWindow(req.query.window);
   const token = req.session.githubToken;
   const sinceIso = new Date(since * 1000).toISOString();
@@ -174,7 +174,7 @@ router.get("/trends", requireAuth, async (req, res) => {
   });
 });
 
-router.get("/trends/summary", requireAuth, async (req, res) => {
+router.get(["/summary", "/trends/summary"], requireAuth, async (req, res) => {
   const { days, since, until } = parseWindow(req.query.window);
   const token = req.session.githubToken;
   const sinceIso = new Date(since * 1000).toISOString();
@@ -212,7 +212,7 @@ router.get("/trends/summary", requireAuth, async (req, res) => {
 /** File-level expansion (File <- Commit <- PR <- Repo <- Org). Reads the
  * vector store's lightweight "meta" tier only — diffs are NOT loaded here;
  * this is the collapse/expand step of the hierarchy. */
-router.get("/trends/files/:owner/:repo", requireAuth, async (req, res) => {
+router.get(["/files/:owner/:repo", "/trends/files/:owner/:repo"], requireAuth, async (req, res) => {
   const { days, since, until } = parseWindow(req.query.window);
   const { owner, repo } = req.params;
   const result = await searchDocuments(

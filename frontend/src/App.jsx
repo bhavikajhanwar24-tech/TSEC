@@ -49,10 +49,21 @@ async function api(path, options = {}) {
     const errorMessage =
       (body && typeof body === "object" && (body.error || body.message)) ||
       `Request failed (${response.status}) at ${url}`;
-    throw new Error(errorMessage);
+    const requestError = new Error(errorMessage);
+    requestError.status = response.status;
+    throw requestError;
   }
 
   return body ?? {};
+}
+
+async function trendsApi(path, legacyPath) {
+  try {
+    return await api(path);
+  } catch (error) {
+    if (error.status !== 404) throw error;
+    return api(legacyPath);
+  }
 }
 
 function formatDate(value) {
@@ -4099,8 +4110,8 @@ function TrendsSection() {
     setPending(true);
     setError("");
     Promise.all([
-      api(`/api/trends?window=${windowDays}`),
-      api(`/api/trends/summary?window=${windowDays}`),
+      trendsApi(`/api/trends?window=${windowDays}`, `/api/trends/trends?window=${windowDays}`),
+      trendsApi(`/api/trends/summary?window=${windowDays}`, `/api/trends/trends/summary?window=${windowDays}`),
     ])
       .then(([trends, digest]) => {
         if (cancelled) return;
@@ -4283,7 +4294,7 @@ function FileLevel({ owner, repo, windowDays }) {
     setError("");
     try {
       setFiles(
-        await api(`/api/trends/files/${owner}/${repo}?window=${windowDays}`),
+        await trendsApi(`/api/trends/files/${owner}/${repo}?window=${windowDays}`, `/api/trends/trends/files/${owner}/${repo}?window=${windowDays}`),
       );
     } catch (requestError) {
       setError(requestError.message);
@@ -4470,7 +4481,7 @@ function SummaryTree({ summary, windowDays }) {
     <section className="summary-section">
       <div className="summary-head">
         <p className="eyebrow">Hierarchical digest</p>
-        <h3>File → Commit → PR → Repo → Org</h3>
+        <h3>Repository intelligence digest</h3>
         <small>
           {summary.window_days}-day window · generated in {summary.generated_ms}
           ms · expand a level only when needed
