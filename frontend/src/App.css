@@ -1,3 +1,7 @@
+.repo-dashboard-topbar { align-items: flex-end; display: flex; gap: 10px; justify-content: space-between; margin-bottom: 26px; }
+.repo-dashboard-topbar > div { margin-right: auto; }
+.report-button { cursor: pointer; }
+.report-button:disabled { cursor: wait; opacity: .7; }
 .github-mark { fill: currentColor; height: 16px; width: 16px; }
 .nav-agent-icon.contributor { border-color: var(--accent); color: var(--accent); }
 .contributor-section { display: grid; gap: 14px; }

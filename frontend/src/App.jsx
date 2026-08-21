@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
+import { jsPDF } from "jspdf";
 import "./App.css";
 
 const API_BASE =
@@ -81,6 +82,166 @@ function Stat({ label, value }) {
       <strong>{value ?? 0}</strong>
     </div>
   );
+}
+
+function generateRepositoryReport(details) {
+  const { repo, issues = [], pulls = [], contributors = [], workflowStatuses = {}, escalationDecisions = {} } = details;
+  const issueItems = issues.filter((item) => !item.pull_request);
+  const openIssues = issueItems.filter((item) => item.state === "open").length;
+  const closedIssues = issueItems.filter((item) => item.state === "closed").length;
+  const openPulls = pulls.filter((item) => item.state === "open").length;
+  const closedPulls = pulls.filter((item) => item.state === "closed").length;
+  const mergedPulls = pulls.filter((item) => item.merged_at || item.merged).length;
+  const totalComments = issueItems.reduce((total, issue) => total + Number(issue.comments || 0), 0);
+  const oldestOpenIssue = issueItems
+    .filter((issue) => issue.state === "open" && issue.created_at)
+    .sort((first, second) => new Date(first.created_at) - new Date(second.created_at))[0];
+  const decisions = Object.values(escalationDecisions || {});
+  const attentionCount = decisions.filter((decision) => decision.needsAttention).length;
+  const workflowValues = Object.values(workflowStatuses || {});
+  const completedWorkflows = workflowValues.filter((status) => status === "complete").length;
+  const activeWorkflows = workflowValues.filter((status) => ["running", "waiting_missing_info", "waiting_duplicate_info"].includes(status)).length;
+  const codeAdditions = (details.codeFrequency || []).reduce((total, point) => total + Number(point[1] || 0), 0);
+  const codeDeletions = (details.codeFrequency || []).reduce((total, point) => total + Math.abs(Number(point[2] || 0)), 0);
+  const categoryCounts = issueItems.reduce((counts, issue) => {
+    const category = issue.labels?.[0]?.name || "Other";
+    counts[category] = (counts[category] || 0) + 1;
+    return counts;
+  }, {});
+  const topCategories = Object.entries(categoryCounts).sort(([, first], [, second]) => second - first).slice(0, 5);
+  const document = new jsPDF();
+  const margin = 18;
+  const pageWidth = document.internal.pageSize.getWidth();
+  const pageHeight = document.internal.pageSize.getHeight();
+  let y = 22;
+  const line = (text, size = 10, color = [65, 61, 56]) => {
+    document.setFontSize(size);
+    document.setTextColor(...color);
+    const wrapped = document.splitTextToSize(String(text), pageWidth - margin * 2);
+    wrapped.forEach((part) => {
+      if (y > pageHeight - 18) { document.addPage(); y = 22; }
+      document.text(part, margin, y);
+      y += size * 0.55 + 5;
+    });
+  };
+  const section = (title) => {
+    y += 5;
+    line(title, 14, [211, 88, 48]);
+    document.setDrawColor(225, 217, 207);
+    document.line(margin, y - 2, pageWidth - margin, y - 2);
+  };
+  const card = (x, width, label, value, color) => {
+    document.setFillColor(...color);
+    document.roundedRect(x, y, width, 25, 3, 3, "F");
+    document.setTextColor(255, 255, 255);
+    document.setFontSize(17);
+    document.text(String(value), x + 5, y + 11);
+    document.setFontSize(8);
+    document.text(label, x + 5, y + 19);
+  };
+  const bar = (label, value, total, color) => {
+    if (y > pageHeight - 30) { document.addPage(); y = 22; }
+    const barWidth = 105;
+    const width = total ? Math.max(2, (value / total) * barWidth) : 2;
+    document.setFontSize(9);
+    document.setTextColor(65, 61, 56);
+    document.text(label, margin, y + 4);
+    document.setFillColor(235, 230, 223);
+    document.roundedRect(margin + 48, y - 2, barWidth, 7, 2, 2, "F");
+    document.setFillColor(...color);
+    document.roundedRect(margin + 48, y - 2, width, 7, 2, 2, "F");
+    document.text(`${value} (${total ? Math.round((value / total) * 100) : 0}%)`, margin + 160, y + 4);
+    y += 14;
+  };
+  const linkLine = (text, url) => {
+    if (y > pageHeight - 18) { document.addPage(); y = 22; }
+    document.setFontSize(10);
+    document.setTextColor(65, 61, 56);
+    if (url) document.textWithLink(text, margin, y, { url });
+    else document.text(text, margin, y);
+    y += 10;
+  };
+  line("RepoGuardian", 10, [211, 88, 48]);
+  line(`${repo.full_name} report`, 22, [35, 32, 29]);
+  line(`Generated ${new Date().toLocaleString()}`, 9, [110, 104, 96]);
+  if (repo.html_url) document.textWithLink("Open repository on GitHub", margin, y + 2, { url: repo.html_url });
+  y += 12;
+  card(margin, 41, "Issues", issueItems.length, [211, 88, 48]);
+  card(margin + 45, 41, "Open", openIssues, [47, 158, 110]);
+  card(margin + 90, 41, "Pull requests", pulls.length, [77, 121, 187]);
+  card(margin + 135, 41, "Contributors", contributors.length, [126, 92, 170]);
+  y += 35;
+  section("Executive summary");
+  const attentionText = attentionCount ? `${attentionCount} escalation${attentionCount === 1 ? "" : "s"} require maintainer attention.` : "No persisted escalations currently require maintainer attention.";
+  line(`This report summarizes ${repo.full_name} using the repository data available at generation time.`);
+  line(`The repository has ${openIssues} open issue${openIssues === 1 ? "" : "s"}, ${openPulls} open pull request${openPulls === 1 ? "" : "s"}, and ${contributors.length} contributor${contributors.length === 1 ? "" : "s"}. ${attentionText}`);
+  line(`Automation coverage: ${completedWorkflows} completed workflow${completedWorkflows === 1 ? "" : "s"} and ${activeWorkflows} active or waiting workflow${activeWorkflows === 1 ? "" : "s"}.`);
+  section("Repository snapshot");
+  line(`Description: ${repo.description || "No description provided."}`);
+  line(`Language: ${repo.language || "Not specified"}   Visibility: ${repo.private ? "Private" : "Public"}`);
+  line(`Stars: ${repo.stargazers_count || 0}   Forks: ${repo.forks_count || 0}   Watchers: ${repo.subscribers_count || 0}`);
+  section("Report scope and method");
+  line("This report is a point-in-time operational summary generated from the repository details loaded in RepoGuardian.");
+  line("Issue, pull request, contributor, workflow, escalation, and code-activity records are summarized as counts and proportions. Links in the report open the corresponding GitHub records.");
+  line(`Coverage includes ${issueItems.length} issues, ${pulls.length} pull requests, ${contributors.length} contributors, and ${totalComments} issue comments.`);
+  section("Key metrics");
+  line(`Issues: ${issueItems.length} total (${openIssues} open, ${closedIssues} closed)`);
+  line(`Pull requests: ${pulls.length} (${openPulls} open, ${closedPulls} closed, ${mergedPulls} merged)   Contributors: ${contributors.length}`);
+  line(`Code activity in the loaded window: +${codeAdditions.toLocaleString()} additions / -${codeDeletions.toLocaleString()} deletions.`);
+  section("Operational observations");
+  if (oldestOpenIssue) line(`Oldest currently open issue: #${oldestOpenIssue.number} ${oldestOpenIssue.title}, opened ${new Date(oldestOpenIssue.created_at).toLocaleDateString()}.`);
+  if (totalComments) line(`Discussion activity totals ${totalComments} comments across the loaded issue set.`);
+  if (mergedPulls) line(`${mergedPulls} pull request${mergedPulls === 1 ? " has" : "s have"} recorded merge activity.`);
+  if (!oldestOpenIssue && !totalComments && !mergedPulls) line("No additional operational observations were available in the loaded data.");
+  section("Issue and PR health");
+  bar("Open issues", openIssues, issueItems.length, [47, 158, 110]);
+  bar("Closed issues", closedIssues, issueItems.length, [145, 137, 128]);
+  bar("Open PRs", openPulls, pulls.length, [77, 121, 187]);
+  bar("Closed PRs", closedPulls, pulls.length, [126, 92, 170]);
+  section("Top issue categories");
+  if (topCategories.length) topCategories.forEach(([category, count]) => bar(category, count, issueItems.length, [211, 88, 48]));
+  else line("No categorized issues available.");
+  section("Workflow and escalation signals");
+  bar("Needs attention", attentionCount, Math.max(1, decisions.length), [211, 88, 48]);
+  bar("Completed workflows", completedWorkflows, Math.max(1, workflowValues.length), [47, 158, 110]);
+  bar("Active or waiting", activeWorkflows, Math.max(1, workflowValues.length), [77, 121, 187]);
+  section("Recommended follow-up");
+  if (attentionCount) line("Review escalated decisions first and use the linked issue records to approve or correct the agent outcome.");
+  if (openIssues > closedIssues) line("Prioritize backlog review because open issues currently exceed closed issues.");
+  if (openPulls) line("Review open pull requests alongside the issue queue to keep delivery work moving.");
+  if (!attentionCount && openIssues <= closedIssues && !openPulls) line("No immediate operational follow-up was identified from the loaded repository signals.");
+  section("Recent issues");
+  issueItems.slice(0, 8).forEach((issue) => {
+    const text = `#${issue.number} ${issue.title} — ${issue.state}`;
+    linkLine(text, issue.html_url);
+  });
+  section("Recent pull requests");
+  pulls.slice(0, 8).forEach((pull) => {
+    const text = `#${pull.number} ${pull.title} — ${pull.state}`;
+    linkLine(text, pull.html_url);
+  });
+  const totalPages = document.getNumberOfPages();
+  for (let page = 1; page <= totalPages; page += 1) {
+    document.setPage(page);
+    document.setFontSize(8);
+    document.setTextColor(130, 124, 116);
+    document.text(`${repo.full_name} | RepoGuardian formal report`, margin, pageHeight - 9);
+    document.text(`Page ${page} of ${totalPages}`, pageWidth - margin, pageHeight - 9, { align: "right" });
+  }
+  document.save(`${repo.name || "repository"}-report.pdf`);
+}
+
+function ReportButton({ details }) {
+  const [generating, setGenerating] = useState(false);
+  function downloadReport() {
+    setGenerating(true);
+    try {
+      generateRepositoryReport(details);
+    } finally {
+      setGenerating(false);
+    }
+  }
+  return <button className="outline-button report-button" type="button" onClick={downloadReport} disabled={generating}>{generating ? "Generating…" : "Generate PDF report ↓"}</button>;
 }
 
 function Avatar({ src, alt = "" }) {
@@ -3246,6 +3407,7 @@ function RepositoryOverviewDashboard({
             >
               Open on GitHub ↗
             </a>
+            <ReportButton details={{ ...details, workflowStatuses, escalationDecisions }} />
           </header>
           <section className="repo-kpi-grid">
             <Stat
@@ -3802,6 +3964,7 @@ function RepositoryTabDashboard({
             >
               Open on GitHub ↗
             </a>
+            <ReportButton details={{ ...details, workflowStatuses, escalationDecisions }} />
           </header>
           <section className="repo-kpi-grid">
             <Stat
