@@ -1848,6 +1848,10 @@ function Markdown({ text }) {
       );
       continue;
     }
+    if (/^\s*(?:\.{3}|…+)\s*$/.test(line)) {
+      i += 1;
+      continue;
+    }
     const heading = line.match(/^(#{1,4})\s+(.*)$/);
     if (heading) {
       const level = heading[1].length;
@@ -2451,12 +2455,10 @@ function DecisionRecord({ run, onFeedback }) {
           {savedFeedback?.verdict || run.status}
         </span>
       </div>
-      <p>{run.reasoning}</p>
+      {run.reasoning && <Markdown text={run.reasoning} />}
       {Array.isArray(run.reasoningTrace) && run.reasoningTrace.length > 0 && (
         <ol className="reasoning-steps">
-          {run.reasoningTrace.map((step, index) => (
-            <li key={`${run.id}-step-${index}`}>{String(step)}</li>
-          ))}
+          {run.reasoningTrace.map((step, index) => <li key={`${run.id}-step-${index}`}><Markdown text={String(step)} /></li>)}
         </ol>
       )}
       {evidence.length > 0 && (

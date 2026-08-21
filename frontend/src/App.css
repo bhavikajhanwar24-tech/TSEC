@@ -261,6 +261,10 @@ dd, .signal-list strong { font-size: 13px; margin: 0; }
 .decision-record-heading span { color: var(--muted); font-size: 11px; }
 .decision-status { background: var(--surface-soft); border-radius: 10px; color: var(--muted); font-size: 10px !important; padding: 4px 7px; }
 .decision-record p { margin-bottom: 8px !important; white-space: pre-wrap; }
+.decision-record .md-block { color: var(--muted); font-size: 12px; line-height: 1.55; }
+.decision-record .md-block strong, .decision-record .md-block h4.md-heading, .decision-record .md-block h5.md-heading, .decision-record .md-block h6.md-heading { color: var(--ink); }
+.decision-record .md-block .md-paragraph { margin-bottom: 8px; }
+.decision-record .md-block .md-list { margin-bottom: 10px; }
 .reasoning-steps { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 8px 0; padding-left: 20px; }
 .decision-evidence { display: flex; flex-wrap: wrap; gap: 7px; margin: 9px 0; }
 .decision-evidence a, .decision-evidence span { background: var(--accent-soft); border-radius: 10px; color: var(--accent); font-size: 11px; padding: 5px 8px; text-decoration: none; }
