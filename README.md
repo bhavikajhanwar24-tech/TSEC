@@ -20,6 +20,8 @@ After a user signs in with GitHub, RepoGuardian can:
 - Show live workflow progress in a centralized triage dashboard.
 - Detect security-sensitive issues and calculate a danger score.
 - Store issues, agent runs, workflow state, feedback, timelines, and escalation decisions in PostgreSQL.
+- Show a repository Inbox for new issues, pull requests, and comment activity.
+- Show repository health and escalation trends with data-driven weekly and daily charts.
 - Keep semantic repository memory in ChromaDB when it is available.
 - Escalate qualifying issues through an aggregation step and attempt maintainer email notification through Resend.
 
@@ -200,6 +202,18 @@ A decision contains:
 
 The aggregator is idempotent for an issue, so repeated agent-save events do not send the same escalation email repeatedly.
 
+## Explainability and Maintainer Feedback
+
+Each persisted agent decision includes the triggering event, tool-call output, retrieved evidence, reasoning steps, final action, and confidence. The issue analysis view presents this record with evidence links and a confidence indicator.
+
+Maintainers can approve a decision or correct it with a typed explanation:
+
+- `evidence_weighting` records a false-positive or incorrectly weighted match and applies a repository-scoped retrieval penalty to similar evidence.
+- `threshold` records that the action should have required more or less confidence and contributes to repository-scoped threshold calibration.
+- `category` records a missed or incorrect category for future repository-specific review.
+
+Feedback is stored with the repository name and agent run. It is not applied globally. When a repository has enough reviewed decisions and a high correction rate, the escalation threshold is raised for that repository and shown in the dashboard.
+
 ## Notifications
 
 When the aggregator decides that an issue needs attention, it calls the existing notification service:
@@ -275,9 +289,20 @@ The webhook validates the GitHub `x-hub-signature-256` header. It accepts issue 
 ```text
 GET /api/issues/:issueId/escalation
 GET /api/issues/:owner/:repo/escalations
+POST /api/issues/:issueId/feedback
 ```
 
 The repository escalation endpoint returns only persisted decisions where `needsAttention` is `true`. Pending or auto-handled issues remain in the regular issue list.
+
+### Cross-Repository Trends
+
+```text
+GET /api/trends?window=30
+GET /api/trends/summary?window=30
+GET /api/trends/files/:owner/:repo?window=30
+```
+
+These endpoints require an authenticated GitHub session. Legacy `/api/trends/trends...` paths are also accepted temporarily during frontend/backend deployment rollouts.
 
 ## Frontend
 
@@ -288,6 +313,7 @@ The dashboard includes:
 - GitHub OAuth entry screen.
 - Repository search and repository cards.
 - Repository overview dashboard.
+- Overview Inbox with Issues, PRs, and Comments tabs.
 - Issues, pull requests, commits, contributors, and code changes views.
 - Expandable commit diff inspection.
 - Repository chat backed by repository context and RAG search.
@@ -296,6 +322,9 @@ The dashboard includes:
 - Security risk card.
 - Escalation status card.
 - Escalations queue with High Priority issues sorted by aggregate confidence.
+- Escalations-over-time chart with High, Medium, and Low urgency series.
+- Health dashboard with KPI cards, health-over-time chart, metric health, and contributor activity views.
+- Approve/correct controls for explainable agent decisions.
 - Light and dark themes with localStorage persistence.
 - Responsive desktop, tablet, and mobile layouts.
 
